@@ -1,0 +1,34 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Setup: install Node.js and Git (winget)",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\scripts\\setup.ps1"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Install dependencies",
+      "type": "shell",
+      "command": "npm.cmd install",
+      "dependsOn": "Setup: install Node.js and Git (winget)",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run KillerGit",
+      "type": "shell",
+      "command": "npm.cmd start",
+      "dependsOn": "Install dependencies",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build installer",
+      "type": "shell",
+      "command": "npm.cmd run dist",
+      "dependsOn": "Install dependencies",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}
