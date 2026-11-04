@@ -66,5 +66,7 @@ module.exports = {
   },
   addToAgent: keyPath => runExe(exe('ssh-add'), [keyPath]),
   agentList: () => runExe(exe('ssh-add'), ['-l']).catch(e => e.message),
-  test: host => runExe(SSH_EXE, ['-T', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', `git@${host}`]).catch(e => e.message),
+  // `ssh -T` exits non-zero even when auth succeeds (no shell), so return the output either way.
+  test: (host, keyPath) => runExe(SSH_EXE, ['-T', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+    ...(keyPath ? ['-i', keyPath, '-o', 'IdentitiesOnly=yes'] : []), `git@${host}`]).catch(e => e.message),
 };

@@ -26,11 +26,13 @@ function ago(sec) {
   for (const [s, n] of u) if (d >= s) return `${Math.floor(d / s)}${n} ago`;
 }
 
+// Each modal gets its own overlay so an error box opened from inside a dialog survives that dialog closing.
 function modal(title, body, buttons = [], { wide } = {}) {
-  const ov = $('#overlay');
+  const ov = h('div', { class: 'overlay' });
+  document.body.append(ov);
   return new Promise(resolve => {
-    const close = v => { ov.hidden = true; ov.innerHTML = ''; document.removeEventListener('keydown', onKey); resolve(v); };
-    const onKey = e => { if (e.key === 'Escape') close(null); };
+    const close = v => { ov.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = e => { if (e.key === 'Escape' && ov === document.body.lastElementChild) close(null); };
     document.addEventListener('keydown', onKey);
     const m = h('div', { class: 'modal' + (wide ? ' wide' : '') },
       h('header', {}, title, h('button', { class: 'icon', onclick: () => close(null) }, '✕')),
@@ -42,9 +44,7 @@ function modal(title, body, buttons = [], { wide } = {}) {
           try { const v = await b.action(); if (v !== false) close(v ?? b.value); } catch (e) { toast(e.message, true); }
         },
       }, b.label))) : null);
-    ov.innerHTML = '';
     ov.append(m);
-    ov.hidden = false;
     ov.onclick = e => { if (e.target === ov) close(null); };
     const first = m.querySelector('input, textarea, select');
     if (first) setTimeout(() => first.focus(), 0);

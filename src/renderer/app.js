@@ -39,13 +39,14 @@ async function task(label, fn, { refresh = true } = {}) {
   try {
     const r = await fn();
     status(label + ' — done');
-    if (refresh && S.repo) await refreshRepo();
     return r;
   } catch (e) {
     toast(`${label} failed:\n${e.message.replace(/^Error invoking remote method 'call': Error: /, '')}`, true);
   } finally {
     busy = false;
     document.body.style.cursor = '';
+    // Refresh even on failure: earlier steps (e.g. adding a remote) may have succeeded.
+    if (refresh && S.repo) await refreshRepo();
   }
 }
 
@@ -145,6 +146,8 @@ function renderToolbar() {
   if (st && !st.upstream && remote && st.branch) { label = `Publish branch`; sub = `to ${remote}`; }
   else if (st && st.behind) { label = `Pull ${remote} ↓${st.behind}`; sub = st.ahead ? `↑${st.ahead} to push after` : 'Behind remote'; }
   else if (st && st.ahead) { label = `Push ${remote} ↑${st.ahead}`; sub = 'Ahead of remote'; }
+  $('#tb-pull-n').textContent = st && st.behind ? st.behind : '';
+  $('#tb-push-n').textContent = st && st.ahead ? st.ahead : '';
   $('#tb-sync-label').textContent = label;
   $('#tb-sync-sub').textContent = sub;
 }
@@ -608,7 +611,13 @@ async function addRemoteDialog() {
   const name = h('input', { value: S.remotes.length ? '' : 'origin', placeholder: 'e.g. gitgud' });
   const url = h('input', { placeholder: 'git@host:namespace/repo.git or https://…' });
   await modal('Add remote', [field('Name', name), field('URL', url)], [{ label: 'Cancel' },
-    { label: 'Add', primary: true, action: () => task('Adding remote', () => G.addRemote(S.repo, name.value.trim(), url.value.trim())) }]);
+    { label: 'Add', primary: true, action: () => {
+      const n = name.value.trim(), u = url.value.trim();
+      if (!n || !u) throw new Error('Name and URL are required');
+      return S.remotes.some(r => r.name === n)
+        ? task(`Updating ${n} URL`, () => G.setRemoteUrl(S.repo, n, u))
+        : task('Adding remote', () => G.addRemote(S.repo, n, u));
+    } }]);
 }
 
 /* ---------- create / publish on remote host ---------- */
@@ -841,7 +850,11 @@ async function accountsPage() {
   modal('Accounts, keys & tokens', [tabs, body], [], { wide: true });
 }
 
-const PROVIDER_NAMES = { github: 'GitHub.com', gitlab: 'GitLab.com', gitgud: 'Gitgud.io', custom: 'Other GitLab host' };
+// Hosts whose SSH endpoint differs from the web host.
+const SSH_HOSTS = { 'gitgud.io': 'ssh.gitgud.io' };
+const info = (title, text) => modal(title, h('pre', { class: 'log' }, text), [{ label: 'OK', primary: true }]);
+
+const PROVIDER_NAMES ={ github: 'GitHub.com', gitlab: 'GitLab.com', gitgud: 'Gitgud.io', custom: 'Other GitLab host' };
 
 async function drawAccounts(el) {
   const accts = await call('vault', 'listAccounts');
@@ -854,11 +867,24 @@ async function drawAccounts(el) {
     h('div', { class: 'muted' }, `${a.username || '(no username)'} @ ${a.host} · token: ${a.hasToken ? 'saved' : 'none'} · SSH key: ${a.sshKey ? a.sshKey.split(/[\\/]/).pop() : 'default'}`),
     h('div', { class: 'actions' },
       h('button', { onclick: () => editAccount(a, el) }, 'Edit'),
-      h('button', { onclick: async () => { try { const me = await call('api', 'me', a.id); toast(`Token OK — signed in as ${me.username}`); } catch (e) { toast(e.message, true); } } }, 'Test token'),
-      h('button', { onclick: async () => toast(await call('ssh', 'test', a.host)) }, 'Test SSH'),
+      h('button', { onclick: async e => {
+        const b = e.currentTarget; b.disabled = true; b.textContent = 'Testing…';
+        try { const me = await call('api', 'me', a.id); info('Token works', `Signed in to ${a.host} as ${me.username}.`); }
+        catch (err) { info('Token test failed', err.message.replace(/^.*Error: /, '')); }
+        b.disabled = false; b.textContent = 'Test token';
+      } }, 'Test token'),
+      h('button', { onclick: async e => {
+        const b = e.currentTarget; b.disabled = true; b.textContent = 'Testing…';
+        const host = SSH_HOSTS[a.host] || a.host;
+        const out = await call('ssh', 'test', host, a.sshKey || undefined);
+        const ok = /welcome|successfully authenticated/i.test(out);
+        info(ok ? 'SSH works' : 'SSH test failed', `git@${host}${a.sshKey ? ' using ' + a.sshKey.split(/[\\/]/).pop() : ' using default keys'}\n\n${out}`);
+        b.disabled = false; b.textContent = 'Test SSH';
+      } }, 'Test SSH'),
       a.sshKey && h('button', { onclick: async () => {
         const k = (await call('ssh', 'list')).find(k => k.path === a.sshKey);
-        try { await call('api', 'addSshKey', a.id, `KillerGit ${k.name}`, k.publicKey); toast('Public key uploaded to account'); } catch (e) { toast(e.message, true); }
+        try { await call('api', 'addSshKey', a.id, `KillerGit ${k.name}`, k.publicKey); info('Key uploaded', `${k.name}.pub was added to your ${a.host} account.`); }
+        catch (e) { info('Upload failed', e.message.replace(/^.*Error: /, '')); }
       } }, 'Upload SSH key to account'),
       h('button', { class: 'danger', onclick: async () => { if (await confirmBox('Remove account', 'Remove this account and its saved token?', 'Remove', true)) { await call('vault', 'removeAccount', a.id); drawAccounts(el); } } }, 'Remove')))));
 }
@@ -1014,6 +1040,10 @@ async function boot() {
   $('#tb-sync').onclick = syncPrimary;
   $('#tb-sync').oncontextmenu = e => { e.preventDefault(); syncMenu(e.currentTarget); };
   $('#tb-sync-sub').title = 'Right-click for more';
+  const needRemote = fn => () => { const r = currentRemote(); if (!S.repo || !r) return toast('This repository has no remotes. Add one under Remotes.'); fn(r); };
+  $('#tb-pull').onclick = needRemote(r => doPull(r));
+  $('#tb-push').onclick = needRemote(r => doPush(r));
+  $('#tb-more').onclick = e => syncMenu(e.currentTarget);
   $('#tb-remote').onclick = e => remoteMenu(e.currentTarget);
   $('#btn-settings').onclick = settingsPage;
   $('#btn-accounts').onclick = accountsPage;

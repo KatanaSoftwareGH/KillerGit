@@ -54,7 +54,11 @@ module.exports = {
   },
   removeAccount(id) { load(); data.accounts = data.accounts.filter(a => a.id !== id); save(); },
   account: id => load().accounts.find(a => a.id === id),
-  accountForHost: host => load().accounts.find(a => a.host === host),
+  // Matches subdomains too: gitgud serves SSH from ssh.gitgud.io, GitHub from ssh.github.com.
+  accountForHost: host => {
+    const accts = load().accounts;
+    return accts.find(a => a.host === host) || accts.find(a => host.endsWith('.' + a.host));
+  },
   // Free-form secrets (extra tokens, notes, key passphrases).
   listSecrets: () => load().secrets.map(({ value, ...s }) => s),
   saveSecret(s) {
