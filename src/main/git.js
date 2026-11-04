@@ -26,6 +26,8 @@ function authFor(url) {
   let sshCmd = `"${ssh.SSH_EXE.replace(/\\/g, '/')}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new` +
     ' -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4';
   if (acct && acct.sshKey) sshCmd += ` -i "${acct.sshKey.replace(/\\/g, '/')}" -o IdentitiesOnly=yes`;
+  // No key assigned: ssh only tries default names (id_ed25519, id_rsa…), so also offer every key in ~/.ssh.
+  else sshCmd += ssh.privateKeys().slice(0, 5).map(k => ` -i "${k.replace(/\\/g, '/')}"`).join('');
   env.GIT_SSH_COMMAND = sshCmd;
   return { args, env };
 }

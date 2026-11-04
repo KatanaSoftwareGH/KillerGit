@@ -35,6 +35,10 @@ module.exports = {
   SSH_EXE,
   SSH_DIR,
   list,
+  // Private keys that have a matching .pub next to them (sync; used to build GIT_SSH_COMMAND).
+  privateKeys: () => fs.existsSync(SSH_DIR)
+    ? fs.readdirSync(SSH_DIR).filter(f => f.endsWith('.pub')).map(f => path.join(SSH_DIR, f.slice(0, -4))).filter(p => fs.existsSync(p))
+    : [],
   available: () => fs.existsSync(path.join(DIR, 'ssh.exe')),
   async generate({ name, type = 'ed25519', comment = '', passphrase = '', bits }) {
     if (!/^[\w.-]+$/.test(name)) throw new Error('Key name may only contain letters, digits, . _ -');
