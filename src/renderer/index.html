@@ -45,7 +45,12 @@
       <section id="view"></section>
     </main>
   </div>
-  <footer id="statusbar"><span id="status-text">Ready</span><span id="status-log" title="Show output">▤</span></footer>
+  <footer id="statusbar">
+    <span id="status-text">Ready</span>
+    <div id="progress" hidden><div id="progress-fill"></div></div>
+    <span id="progress-pct"></span>
+    <span id="status-log" title="Show output">▤</span>
+  </footer>
   <div id="menu" hidden></div>
   <script src="graph.js"></script>
   <script src="ui.js"></script>

@@ -8,10 +8,41 @@ const S = {
   selFile: null, history: null, selCommit: null,
 };
 
-window.kg.onProgress(t => {
-  const line = t.trim().split(/[\r\n]/).filter(Boolean).pop();
-  if (line) status(line);
-});
+// Git writes progress to stderr as "Phase:  42% (123/456), 1.2 MiB | 300 KiB/s", redrawn with \r.
+const Progress = {
+  label: '', chunk: '',
+  start(label) {
+    this.label = label; this.chunk = '';
+    $('#progress').hidden = false; $('#progress').classList.add('indet');
+    $('#progress-pct').textContent = '';
+    status(label + '…');
+  },
+  update(text) {
+    logBuf += text;
+    const line = text.split(/[\r\n]/).map(s => s.trim()).filter(Boolean).pop();
+    if (!line) return;
+    const chunk = line.match(/(?:chunk|part|round) (\d+)(?:\/(\d+))?/i);
+    if (chunk) this.chunk = chunk[2] ? `chunk ${chunk[1]}/${chunk[2]}` : `round ${chunk[1]}`;
+    const m = line.match(/^(?:remote:\s*)?([A-Za-z ]+?):\s+(\d+)% \(([\d/]+)\)(?:,\s*([^|]+?)(?:\s*\|\s*(.+?))?)?(?:,\s*done\.?)?$/);
+    const prefix = `${this.label}${this.chunk ? ` (${this.chunk})` : ''}`;
+    if (m) {
+      const [, phase, pct, count, rawSize, speed] = m;
+      const size = rawSize && !/^done/.test(rawSize) ? rawSize : '';
+      $('#progress').classList.remove('indet');
+      $('#progress-fill').style.width = pct + '%';
+      $('#progress-pct').textContent = pct + '%';
+      status(`${prefix} — ${phase} ${count}${size ? ' · ' + size.trim() : ''}${speed ? ' · ' + speed.trim() : ''}`);
+    } else {
+      status(`${prefix} — ${line.replace(/^remote:\s*/, '')}`);
+    }
+  },
+  end() {
+    $('#progress').hidden = true;
+    $('#progress-fill').style.width = '0';
+    $('#progress-pct').textContent = '';
+  },
+};
+window.kg.onProgress(t => Progress.update(t));
 
 const ACCENTS = ['#2f81f7', '#8250df', '#db61a2', '#cf222e', '#e16f24', '#d29922', '#1a7f37', '#0f9b8e'];
 
@@ -34,7 +65,7 @@ let busy = false;
 async function task(label, fn, { refresh = true } = {}) {
   if (busy) return toast('Another operation is running');
   busy = true;
-  status(label + '…');
+  Progress.start(label);
   document.body.style.cursor = 'progress';
   try {
     const r = await fn();
@@ -44,6 +75,7 @@ async function task(label, fn, { refresh = true } = {}) {
     toast(`${label} failed:\n${e.message.replace(/^Error invoking remote method 'call': Error: /, '')}`, true);
   } finally {
     busy = false;
+    Progress.end();
     document.body.style.cursor = '';
     // Refresh even on failure: earlier steps (e.g. adding a remote) may have succeeded.
     if (refresh && S.repo) await refreshRepo();
