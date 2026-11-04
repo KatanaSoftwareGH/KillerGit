@@ -316,6 +316,35 @@ function welcome() {
 }
 
 /* ---------- changes ---------- */
+// Builds a commit message from the file list: staged files if any, otherwise everything (what Commit would take).
+function suggestMessage(files) {
+  const staged = files.filter(f => f.staged);
+  const set = staged.length ? staged : files;
+  if (!set.length) return { summary: '', desc: '' };
+  const kind = f => {
+    const c = staged.length ? f.index : (f.work !== ' ' ? f.work : f.index);
+    return c === '?' || c === 'A' ? 'Add' : c === 'D' ? 'Delete' : c === 'R' ? 'Rename' : 'Update';
+  };
+  const base = p => p.split('/').pop();
+  const join = names => names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  const groups = {};
+  set.forEach(f => (groups[kind(f)] = groups[kind(f)] || []).push(f));
+  const verbs = Object.keys(groups);
+
+  let summary;
+  if (verbs.length === 1 && set.length <= 3) summary = `${verbs[0]} ${join(set.map(f => base(f.path)))}`;
+  else if (verbs.length === 1) {
+    const dirs = set.map(f => f.path.split('/').slice(0, -1));
+    let common = dirs[0];
+    dirs.forEach(d => { let i = 0; while (i < common.length && common[i] === d[i]) i++; common = common.slice(0, i); });
+    summary = `${verbs[0]} ${set.length} files${common.length ? ' in ' + common.join('/') : ''}`;
+  } else summary = verbs.map((v, i) => `${i ? v.toLowerCase() : v} ${groups[v].length === 1 ? base(groups[v][0].path) : groups[v].length + ' files'}`).join(', ');
+
+  const past = { Add: 'Added', Delete: 'Deleted', Rename: 'Renamed', Update: 'Updated' };
+  const desc = set.length < 2 ? '' : verbs.map(v => groups[v].map(f => `- ${past[v]} ${f.orig ? f.orig + ' → ' : ''}${f.path}`).join('\n')).join('\n');
+  return { summary, desc };
+}
+
 function viewChanges() {
   const st = S.status;
   const files = st.files;
@@ -342,10 +371,22 @@ function viewChanges() {
   const allCb = h('input', { type: 'checkbox', checked: allStaged });
   allCb.onclick = () => task('Staging', () => (allCb.checked ? G.stageAll(S.repo) : G.unstage(S.repo, ['.'])));
 
-  const summary = h('input', { placeholder: 'Summary (required)', value: S.draftSummary || '' });
+  const suggestion = suggestMessage(files);
+  const summary = h('input', { placeholder: suggestion.summary ? `${suggestion.summary} (Tab to accept)` : 'Summary (required)', value: S.draftSummary || '' });
   const desc = h('textarea', { placeholder: 'Description' }, S.draftDesc || '');
   summary.oninput = () => (S.draftSummary = summary.value);
   desc.oninput = () => (S.draftDesc = desc.value);
+  summary.onkeydown = e => {
+    if (e.key === 'Tab' && !e.shiftKey && !summary.value && suggestion.summary) {
+      e.preventDefault();
+      summary.value = S.draftSummary = suggestion.summary;
+    }
+  };
+  const autofill = h('button', { class: 'icon', title: 'Autofill summary and description from changes', disabled: !files.length }, '✨');
+  autofill.onclick = () => {
+    summary.value = S.draftSummary = suggestion.summary;
+    desc.value = S.draftDesc = suggestion.desc;
+  };
   const amend = h('input', { type: 'checkbox' });
   const chunk = h('input', { type: 'checkbox', checked: !!S.settings.chunkCommit });
   const chunkN = h('input', { type: 'number', min: 1, value: S.settings.chunkCommitSize || 100 });
@@ -380,7 +421,7 @@ function viewChanges() {
         { label: 'Refresh', action: refreshRepo },
       ]) }, '⋯')),
     list,
-    h('div', { class: 'commit-box' }, summary, desc,
+    h('div', { class: 'commit-box' }, h('div', { class: 'summary-row' }, summary, autofill), desc,
       h('div', { class: 'opts' }, h('label', { class: 'check' }, amend, 'Amend last commit'),
         h('label', { class: 'check', title: 'Split staged files into several smaller commits' }, chunk, 'Commit in chunks of', chunkN, 'files')),
       commitBtn));

@@ -68,7 +68,10 @@ a { color: var(--accent); cursor: pointer; }
 .empty button { margin: 4px; }
 
 .split { display: flex; flex: 1; min-width: 0; }
-.pane-l { width: 320px; display: flex; flex-direction: column; border-right: 1px solid var(--border); min-height: 0; }
+.pane-l { width: 320px; display: flex; flex-direction: column; border-right: 1px solid var(--border); min-height: 0; overflow-y: auto; }
+/* The file list shrinks to a floor, then the whole pane scrolls so the commit box stays reachable. */
+.pane-l > .list { min-height: 120px; }
+.pane-l > .list-h, .pane-l > .commit-box { flex: none; }
 .pane-r { flex: 1; overflow: auto; min-width: 0; }
 .list { flex: 1; overflow: auto; }
 .list-h { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--bg2); }
@@ -82,6 +85,8 @@ a { color: var(--accent); cursor: pointer; }
 
 .commit-box { border-top: 1px solid var(--border); padding: 10px; display: flex; flex-direction: column; gap: 6px; background: var(--bg2); }
 .commit-box textarea { resize: vertical; min-height: 60px; }
+.commit-box .summary-row { display: flex; gap: 6px; }
+.commit-box .summary-row input { flex: 1; min-width: 0; }
 .commit-box .opts { display: flex; gap: 12px; flex-wrap: wrap; color: var(--fg2); font-size: 12px; align-items: center; }
 .commit-box .opts input[type=number] { width: 60px; padding: 2px 4px; }
 

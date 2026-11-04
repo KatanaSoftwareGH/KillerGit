@@ -21,7 +21,10 @@ function authFor(url) {
     const b64 = Buffer.from(`${acct.username || user}:${acct.token}`).toString('base64');
     args.push('-c', `http.extraHeader=Authorization: Basic ${b64}`);
   }
-  let sshCmd = `"${ssh.SSH_EXE.replace(/\\/g, '/')}"`;
+  // git runs in a hidden console, so ssh must never prompt (unknown host key, passphrase):
+  // a prompt nobody can see looks like an endless push. Fail fast and surface the error instead.
+  let sshCmd = `"${ssh.SSH_EXE.replace(/\\/g, '/')}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new` +
+    ' -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4';
   if (acct && acct.sshKey) sshCmd += ` -i "${acct.sshKey.replace(/\\/g, '/')}" -o IdentitiesOnly=yes`;
   env.GIT_SSH_COMMAND = sshCmd;
   return { args, env };
