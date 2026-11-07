@@ -17,6 +17,6 @@
   "build": {
     "appId": "io.killergit.app",
     "files": ["src/**/*", "package.json"],
-    "win": { "target": "nsis", "signAndEditExecutable": false }
+    "win": { "target": "nsis", "icon": "build/icon.ico" }
   }
 }

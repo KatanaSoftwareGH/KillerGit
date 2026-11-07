@@ -37,13 +37,26 @@ function modal(title, body, buttons = [], { wide } = {}) {
     const m = h('div', { class: 'modal' + (wide ? ' wide' : '') },
       h('header', {}, title, h('button', { class: 'icon', onclick: () => close(null) }, '✕')),
       h('div', { class: 'body' }, body),
-      buttons.length ? h('footer', {}, buttons.map(b => h('button', {
-        class: b.primary ? 'primary' : b.danger ? 'danger' : '',
-        onclick: async () => {
-          if (!b.action) return close(b.value);
-          try { const v = await b.action(); if (v !== false) close(v ?? b.value); } catch (e) { toast(e.message, true); }
-        },
-      }, b.label))) : null);
+      buttons.length ? h('footer', {}, buttons.map(b => {
+        const btn = h('button', {
+          class: b.primary ? 'primary' : b.danger ? 'danger' : '',
+          onclick: async () => {
+            if (!b.action) return close(b.value);
+            const orig = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Please wait…';
+            try {
+              const v = await b.action(btn);
+              if (v !== false) close(v ?? b.value);
+            } catch (e) {
+              btn.disabled = false;
+              btn.textContent = orig;
+              toast(e.message, true);
+            }
+          },
+        }, b.label);
+        return btn;
+      })) : null);
     ov.append(m);
     ov.onclick = e => { if (e.target === ov) close(null); };
     const first = m.querySelector('input, textarea, select');
@@ -98,3 +111,28 @@ function showLog() {
 }
 
 function field(label, input) { return h('label', { class: 'field' }, h('span', {}, label), input); }
+
+// Reusable, slightly ridiculous loading throbber. `small` fits inside panes,
+// lists and selects; the default fills an empty view.
+const THROBBER_EMOJI = ['🚀', '🐙', '🦑', '🧙', '🍕', '🦦', '🪄', '🐿️', '🛸', '🧃'];
+let throbberN = 0;
+function throbber(title = 'Loading…', sub = '', { emoji, small = false, className = '' } = {}) {
+  const e = emoji || THROBBER_EMOJI[throbberN++ % THROBBER_EMOJI.length];
+  return h('div', { class: 'throbber-box' + (small ? ' small' : '') + (className ? ' ' + className : ''), role: 'status', 'aria-live': 'polite' },
+    h('div', { class: 'throbber-graphic', 'aria-hidden': 'true' },
+      h('div', { class: 'throbber-pulse' }),
+      h('div', { class: 'throbber-ring' }),
+      h('div', { class: 'throbber-emoji' }, e)),
+    h('div', { class: 'throbber-title' }, title),
+    sub ? h('div', { class: 'throbber-sub' }, sub) : null);
+}
+const throbberInto = (el, ...args) => { el.innerHTML = ''; el.append(throbber(...args)); return el; };
+
+// A modal with no footer, for work that has to finish before the real dialog opens.
+function loadingModal(title, body) {
+  const ov = h('div', { class: 'overlay' });
+  const m = h('div', { class: 'modal' }, h('header', {}, title), h('div', { class: 'body' }, body));
+  ov.append(m);
+  document.body.append(ov);
+  return { el: m, close: () => ov.remove() };
+}

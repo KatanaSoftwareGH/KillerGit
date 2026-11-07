@@ -63,8 +63,8 @@ async function remoteUrl(cwd, remote) {
   return (await run(cwd, ['remote', 'get-url', remote], { allowFail: true })).trim();
 }
 
-async function status(cwd) {
-  const out = await run(cwd, ['status', '--porcelain=v1', '-z', '-b', '-uall']);
+async function status(cwd, { untracked = 'all' } = {}) {
+  const out = await run(cwd, ['status', '--porcelain=v1', '-z', '-b', `-u${untracked}`]);
   const parts = out.split('\0');
   const files = [];
   let branch = '', upstream = '', ahead = 0, behind = 0;

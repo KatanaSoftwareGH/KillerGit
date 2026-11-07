@@ -6,6 +6,7 @@ const P = '__progress__';
 const S = {
   settings: {}, repos: [], repo: null, status: null, tab: 'changes', remotes: [],
   selFile: null, history: null, selCommit: null,
+  loading: null, reposLoading: false,
 };
 
 // Git writes progress to stderr as "Phase:  42% (123/456), 1.2 MiB | 300 KiB/s", redrawn with \r.
@@ -66,6 +67,7 @@ async function task(label, fn, { refresh = true } = {}) {
   if (busy) return toast('Another operation is running');
   busy = true;
   Progress.start(label);
+  $('#status-text').classList.add('busy');
   document.body.style.cursor = 'progress';
   try {
     const r = await fn();
@@ -76,6 +78,7 @@ async function task(label, fn, { refresh = true } = {}) {
   } finally {
     busy = false;
     Progress.end();
+    $('#status-text').classList.remove('busy');
     document.body.style.cursor = '';
     // Refresh even on failure: earlier steps (e.g. adding a remote) may have succeeded.
     if (refresh && S.repo) await refreshRepo();
@@ -83,14 +86,77 @@ async function task(label, fn, { refresh = true } = {}) {
 }
 
 /* ---------- repository list ---------- */
+let indicatorRun = 0, reposRun = 0, treeFrame = 0;
+function scheduleTree() {
+  if (treeFrame) return;
+  treeFrame = requestAnimationFrame(() => { treeFrame = 0; renderTree(); });
+}
 async function loadRepos() {
   const paths = S.settings.repos || [];
-  S.repos = await Promise.all(paths.map(p => call('repo', 'summary', p).catch(() => ({ path: p, missing: true }))));
+  const run = ++reposRun;
+  if (treeFrame) { cancelAnimationFrame(treeFrame); treeFrame = 0; }
+  S.repos = paths.map(p => ({ path: p, name: p.split(/[\\/]/).pop(), pending: true }));
+  S.reposLoading = true;
+  if (!paths.length) {
+    S.reposLoading = false;
+    return renderTree();
+  }
   renderTree();
+
+  // Fill the sidebar as summaries arrive instead of waiting for the slowest
+  // repository (network drives and huge repos can take a long time).
+  const queue = paths.slice();
+  const worker = async () => {
+    while (queue.length) {
+      if (run !== reposRun) return;
+      const p = queue.shift();
+      let r;
+      try { r = await call('repo', 'summary', p); }
+      catch { r = { path: p, missing: true }; }
+      if (run !== reposRun) return;
+      r.name = r.name || p.split(/[\\/]/).pop();
+      const i = S.repos.findIndex(x => x.path === p);
+      if (i >= 0) S.repos[i] = r;
+      scheduleTree();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, queue.length) }, worker));
+  if (run !== reposRun) return;
+  S.reposLoading = false;
+  if (treeFrame) { cancelAnimationFrame(treeFrame); treeFrame = 0; }
+  renderTree();
+  refreshRepoIndicators();
+}
+
+// Change indicators are deliberately not part of the initial list load: `git
+// status` can take a long time in big repos, and blocking the whole sidebar on
+// the slowest one made every repo disappear. Check them a few at a time and
+// update the dots as results arrive.
+async function refreshRepoIndicators() {
+  const run = ++indicatorRun;
+  const queue = S.repos.filter(r => !r.missing && r.path !== S.repo).map(r => r.path);
+  const worker = async () => {
+    while (queue.length) {
+      const p = queue.shift();
+      try {
+        const info = await call('repo', 'changed', p);
+        if (run !== indicatorRun) return;
+        const r = S.repos.find(x => x.path === p);
+        if (!r || r.path === S.repo) continue;
+        r.changed = info.changed || 0;
+        r.ahead = info.ahead || 0;
+        r.behind = info.behind || 0;
+        scheduleTree();
+      } catch {}
+    }
+  };
+  const n = Math.min(3, queue.length);
+  return Promise.all(Array.from({ length: n }, worker));
 }
 
 function renderTree() {
   const tree = $('#repo-tree');
+  if (S.reposLoading && !S.repos.length) return throbberInto(tree, 'Loading repositories…', 'Asking git about your repos', { small: true, emoji: '📚' });
   const q = $('#repo-filter').value.toLowerCase();
   const sort = S.settings.repoSort || 'az';
   $('#repo-sort').value = sort;
@@ -113,7 +179,8 @@ function renderTree() {
     saveSettings({ collapsed: [...collapsed] }).then(renderTree);
   };
   const item = r => h('div', {
-    class: 'repo-item' + (r.path === S.repo ? ' active' : '') + (r.missing ? ' missing' : ''), title: r.path,
+    class: 'repo-item' + (r.path === S.repo ? ' active' : '') + (r.missing ? ' missing' : '') + (r.pending ? ' pending' : '') + (r.path === S.repo && S.loading ? ' opening' : ''),
+    title: r.pending ? 'Loading repository details…' : r.path,
     onclick: () => openRepo(r.path),
     oncontextmenu: e => menu(e.clientX, e.clientY, [
       { label: 'Show in Explorer', action: () => call('sys', 'openPath', r.path) },
@@ -122,7 +189,9 @@ function renderTree() {
       { label: 'Copy path', action: () => call('sys', 'copy', r.path) }, '-',
       { label: 'Remove from list', action: async () => { await call('repo', 'remove', r.path); S.settings = await call('vault', 'settings'); if (S.repo === r.path) S.repo = null; loadRepos(); render(); } },
     ]),
-  }, h('span', {}, r.name), h('span', { class: 'when' }, ago(r.lastActivity)));
+  }, h('span', { class: 'repo-name' }, r.name),
+    r.changed ? h('span', { class: 'repo-dirty', title: `${r.changed} uncommitted change${r.changed === 1 ? '' : 's'}` }) : null,
+    h('span', { class: 'when' }, ago(r.lastActivity)));
 
   tree.innerHTML = '';
   const hosts = orderKeys(groups, o => Object.values(o).flat());
@@ -146,10 +215,16 @@ function renderTree() {
 }
 
 async function openRepo(p) {
+  if (!p) return;
   S.repo = p;
   S.selFile = null; S.history = null; S.selCommit = null;
+  S.status = null; S.remotes = []; S.conflict = null;
+  const name = p.split(/[\\/]/).pop();
+  S.loading = { title: `Opening ${name}`, sub: 'Reading status, remotes and branches…', emoji: '📂' };
   saveSettings({ lastRepo: p });
   renderTree();
+  renderToolbar();
+  render();
   await refreshRepo();
 }
 
@@ -160,9 +235,29 @@ function currentRemote() {
 
 async function refreshRepo() {
   if (!S.repo) return render();
+  const repo = S.repo;
+  if (!S.status && !S.loading) {
+    S.loading = { title: 'Loading repository…', sub: 'Reading status, remotes and branches…', emoji: '⏳' };
+    render();
+  }
   try {
-    [S.status, S.remotes, S.conflict] = await Promise.all([G.status(S.repo), G.remotes(S.repo), G.conflictState(S.repo)]);
-  } catch (e) { S.status = null; toast(e.message, true); }
+    const [status, remotes, conflict] = await Promise.all([G.status(repo), G.remotes(repo), G.conflictState(repo)]);
+    if (S.repo !== repo) return;
+    S.status = status; S.remotes = remotes; S.conflict = conflict;
+  } catch (e) {
+    if (S.repo !== repo) return;
+    S.status = null;
+    toast(e.message, true);
+  }
+  if (S.repo !== repo) return;
+  S.loading = null;
+  const entry = S.repos.find(r => r.path === repo);
+  if (entry) {
+    entry.changed = S.status ? S.status.files.length : 0;
+    entry.ahead = S.status ? S.status.ahead : 0;
+    entry.behind = S.status ? S.status.behind : 0;
+  }
+  renderTree();
   renderToolbar();
   render();
 }
@@ -254,8 +349,8 @@ async function branchMenu(el) {
     const locals = all.filter(b => b.type === 'local' && b.name.toLowerCase().includes(q)).sort((a, b) => b.date - a.date);
     const localNames = new Set(all.filter(b => b.type === 'local').map(b => b.name));
     const remotes = all.filter(b => b.type === 'remote' && b.name.toLowerCase().includes(q) && !localNames.has(b.name.replace(/^[^/]+\//, '')));
-    list.append(h('div', { class: 'mh' }, 'Local'), locals.map(b => mk(b)));
-    if (remotes.length) list.append(h('div', { class: 'mh' }, 'Remote'), remotes.slice(0, 50).map(b => mk(b, true)));
+    list.append(h('div', { class: 'mh' }, 'Local'), ...locals.map(b => mk(b)));
+    if (remotes.length) list.append(h('div', { class: 'mh' }, 'Remote'), ...remotes.slice(0, 50).map(b => mk(b, true)));
   };
   filter.oninput = draw;
   draw();
@@ -292,6 +387,7 @@ function render() {
   const v = $('#view');
   v.innerHTML = '';
   if (!S.repo) return v.append(welcome());
+  if (S.loading) return v.append(throbber(S.loading.title, S.loading.sub, { emoji: S.loading.emoji }));
   if (!S.status) return v.append(h('div', { class: 'empty' }, h('h2', {}, 'Repository unavailable'), h('p', {}, S.repo)));
   const views = { changes: viewChanges, history: viewHistory, branches: viewBranches, stashes: viewStashes, remotes: viewRemotes, issues: viewIssues };
   const el = views[S.tab]();
@@ -301,9 +397,74 @@ function render() {
         h('button', { onclick: () => task('Continuing', () => G.continueOp(S.repo, S.conflict)) }, 'Continue'),
         h('button', { class: 'danger', onclick: () => task('Aborting', () => G.abort(S.repo)) }, 'Abort')),
       el);
-    return v.append(wrap);
+    v.append(wrap);
+    wirePaneResizers();
+    return;
   }
   v.append(el);
+  wirePaneResizers();
+}
+
+/* ---------- resizable panes ---------- */
+function installResizer(handle, target, { min = 180, max = () => innerWidth - 320, reset, onEnd } = {}) {
+  let startX = 0, startW = 0, dragging = false;
+  const bound = w => Math.max(min, Math.min(Math.max(min, max()), Math.round(w)));
+  const move = e => {
+    if (!dragging) return;
+    target.style.width = bound(startW + e.clientX - startX) + 'px';
+  };
+  const up = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing');
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    if (onEnd) onEnd(bound(target.getBoundingClientRect().width));
+  };
+  handle.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    startX = e.clientX;
+    startW = target.getBoundingClientRect().width;
+    dragging = true;
+    document.body.classList.add('resizing');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+  handle.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const w = bound(target.getBoundingClientRect().width + (e.key === 'ArrowRight' ? 16 : -16));
+    target.style.width = w + 'px';
+    if (onEnd) onEnd(w);
+  });
+  handle.addEventListener('dblclick', () => {
+    target.style.width = reset || '';
+    if (onEnd) onEnd(bound(target.getBoundingClientRect().width));
+  });
+}
+
+function wirePaneResizers() {
+  const defaults = { changes: '320px', history: '58%', issues: '400px' };
+  document.querySelectorAll('#view .split').forEach(split => {
+    if (split.dataset.resizable) return;
+    const left = split.querySelector(':scope > .pane-l');
+    const right = split.querySelector(':scope > .pane-r');
+    if (!left || !right) return;
+    split.dataset.resizable = '1';
+    const key = S.tab;
+    const saved = (S.settings.paneWidths || {})[key];
+    const available = Math.max(240, split.getBoundingClientRect().width - 320);
+    if (saved) left.style.width = Math.min(available, Math.max(240, +saved)) + 'px';
+    const handle = h('div', { class: 'resizer pane-resizer', role: 'separator', 'aria-orientation': 'vertical', tabindex: '0', title: 'Drag to resize (double-click to reset)' });
+    left.after(handle);
+    installResizer(handle, left, {
+      min: 240,
+      max: () => Math.max(260, split.getBoundingClientRect().width - 320),
+      reset: defaults[key] || '320px',
+      onEnd: w => saveSettings({ paneWidths: { ...(S.settings.paneWidths || {}), [key]: w } }),
+    });
+  });
 }
 
 function welcome() {
@@ -312,6 +473,7 @@ function welcome() {
     h('button', { class: 'primary', onclick: cloneDialog }, 'Clone repository'),
     h('button', { onclick: addLocal }, 'Add local repository'),
     h('button', { onclick: createDialog }, 'Create new repository'),
+    h('button', { onclick: importGithubDesktop }, 'Import from GitHub Desktop'),
     h('p', {}, h('a', { onclick: accountsPage }, 'Set up accounts & SSH keys')));
 }
 
@@ -453,9 +615,19 @@ async function ensureIdentity() {
 
 async function loadFileDiff(el, f) {
   const untracked = f.index === '?';
-  const parts = [];
-  if (f.staged) parts.push(['Staged', await G.diff(S.repo, f.path, true), 'staged']);
-  if (f.unstaged || untracked) parts.push([untracked ? 'New file' : 'Unstaged', await G.diff(S.repo, f.path, false, untracked), untracked ? 'untracked' : 'unstaged']);
+  const token = (el._diffToken = (el._diffToken || 0) + 1);
+  el.innerHTML = '';
+  el.append(throbber('Loading diff…', f.path.split('/').pop(), { small: true, emoji: '🔍' }));
+  let parts;
+  try {
+    parts = [];
+    if (f.staged) parts.push(['Staged', await G.diff(S.repo, f.path, true), 'staged']);
+    if (f.unstaged || untracked) parts.push([untracked ? 'New file' : 'Unstaged', await G.diff(S.repo, f.path, false, untracked), untracked ? 'untracked' : 'unstaged']);
+  } catch (e) {
+    if (token === el._diffToken) throbberInto(el, 'Could not load diff', e.message, { small: true, emoji: '💥' });
+    return;
+  }
+  if (token !== el._diffToken) return;
   el.innerHTML = '';
   for (const [title, text, kind] of parts) el.append(renderDiff(text, `${title}: ${f.path}`, kind));
 }
@@ -549,17 +721,23 @@ function viewHistory() {
     if (S.history.more) listEl.append(h('div', { style: 'padding:10px;text-align:center' }, h('button', { onclick: loadMore }, 'Load more')));
   };
   const loadMore = async () => {
-    const more = await G.log(S.repo, { skip: S.history.commits.length, limit: 400, all: allBranches.checked });
-    const lay = Graph.layout(more, S.history.lanes);
-    S.history.commits.push(...more); S.history.rows.push(...lay.rows); S.history.lanes = lay.lanes; S.history.more = more.length === 400;
-    draw();
+    throbberInto(listEl, 'Loading more commits…', `Already at ${S.history.commits.length}`, { small: true, emoji: '📜' });
+    try {
+      const more = await G.log(S.repo, { skip: S.history.commits.length, limit: 400, all: allBranches.checked });
+      const lay = Graph.layout(more, S.history.lanes);
+      S.history.commits.push(...more); S.history.rows.push(...lay.rows); S.history.lanes = lay.lanes; S.history.more = more.length === 400;
+      draw();
+    } catch (e) { draw(); toast(e.message, true); }
   };
   filter.oninput = draw;
+  if (!S.history) listEl.append(throbber('Wrangling the commit graph…', 'Big repositories take a moment', { small: true, emoji: '🕸️' }));
   (async () => {
     if (!S.history) {
-      const commits = await G.log(S.repo, { limit: 400, all: allBranches.checked });
-      const lay = Graph.layout(commits);
-      S.history = { commits, rows: lay.rows, lanes: lay.lanes, more: commits.length === 400 };
+      try {
+        const commits = await G.log(S.repo, { limit: 400, all: allBranches.checked });
+        const lay = Graph.layout(commits);
+        S.history = { commits, rows: lay.rows, lanes: lay.lanes, more: commits.length === 400 };
+      } catch (e) { throbberInto(listEl, 'Could not load history', e.message, { small: true, emoji: '💥' }); return; }
     }
     draw();
     if (S.selCommit) showCommit(detail, S.selCommit);
@@ -568,18 +746,28 @@ function viewHistory() {
 }
 
 async function showCommit(el, hash) {
-  const c = await G.show(S.repo, hash);
+  throbberInto(el, 'Loading commit…', hash.slice(0, 10), { small: true, emoji: '🧾' });
+  let c;
+  try { c = await G.show(S.repo, hash); }
+  catch (e) { throbberInto(el, 'Could not load commit', e.message, { small: true, emoji: '💥' }); toast(e.message, true); return; }
   const [subject, ...rest] = c.body.trim().split('\n');
   const diffBox = h('div');
+  const loadFile = async path => {
+    throbberInto(diffBox, 'Loading file diff…', path.split('/').pop(), { small: true, emoji: '📄' });
+    try {
+      const text = await G.showFile(S.repo, hash, path);
+      diffBox.innerHTML = '';
+      diffBox.append(renderDiff(text, path));
+    } catch (e) { throbberInto(diffBox, 'Could not load file diff', e.message, { small: true, emoji: '💥' }); }
+  };
   el.innerHTML = '';
   el.append(h('div', { class: 'detail' },
     h('h3', {}, subject), rest.join('\n').trim() && h('p', { class: 'issue-body muted' }, rest.join('\n').trim()),
     h('div', { class: 'muted' }, `${c.author} · ${new Date(c.time * 1000).toLocaleString()} · `, h('a', { onclick: () => call('sys', 'copy', c.hash) }, c.hash.slice(0, 10))),
-    h('div', { style: 'margin:10px 0' }, c.files.map(f => h('div', { class: 'row', onclick: async () => {
-      diffBox.innerHTML = ''; diffBox.append(renderDiff(await G.showFile(S.repo, hash, f.path), f.path));
-    } }, h('span', { class: 'badge b-' + f.status }, f.status), h('span', { class: 'name' }, f.path)))),
+    h('div', { style: 'margin:10px 0' }, c.files.map(f => h('div', { class: 'row', onclick: () => loadFile(f.path) },
+      h('span', { class: 'badge b-' + f.status }, f.status), h('span', { class: 'name' }, f.path)))),
     diffBox));
-  if (c.files[0]) diffBox.append(renderDiff(await G.showFile(S.repo, hash, c.files[0].path), c.files[0].path));
+  if (c.files[0]) await loadFile(c.files[0].path);
 }
 
 function commitMenu(e, c) {
@@ -599,9 +787,11 @@ function commitMenu(e, c) {
 
 /* ---------- branches ---------- */
 function viewBranches() {
-  const page = h('div', { class: 'page' }, h('div', { class: 'muted' }, 'Loading…'));
+  const page = h('div', { class: 'page' }, throbber('Fetching branches…', 'Local, remote and tags', { small: true, emoji: '🌿' }));
   (async () => {
-    const all = await G.branches(S.repo);
+    let all;
+    try { all = await G.branches(S.repo); }
+    catch (e) { throbberInto(page, 'Could not load branches', e.message, { small: true, emoji: '💥' }); return; }
     const sorted = list => list.sort((a, b) => b.date - a.date);
     const table = (rows, cols) => h('table', { class: 'table' }, h('tr', {}, cols.map(c => h('th', {}, c))), rows);
     const local = sorted(all.filter(b => b.type === 'local')).map(b => h('tr', {},
@@ -638,9 +828,12 @@ function viewBranches() {
 
 /* ---------- stashes ---------- */
 function viewStashes() {
-  const page = h('div', { class: 'page' });
+  const page = h('div', { class: 'page' }, throbber('Digging through stashes…', 'Checking for hidden work', { small: true, emoji: '🧺' }));
   (async () => {
-    const list = await G.stashList(S.repo);
+    let list;
+    try { list = await G.stashList(S.repo); }
+    catch (e) { throbberInto(page, 'Could not load stashes', e.message, { small: true, emoji: '💥' }); return; }
+    page.innerHTML = '';
     page.append(h('div', { class: 'toolbar-row' }, h('button', { class: 'primary', onclick: async () => {
       const m = await prompt('Stash changes', 'Message (optional)');
       if (m !== null) task('Stashing', () => G.stash(S.repo, m));
@@ -754,13 +947,14 @@ function viewIssues() {
     if (!issues.length) list.append(h('div', { class: 'muted', style: 'padding:12px' }, 'No issues.'));
   };
   const load = async () => {
-    list.innerHTML = '<div class="muted" style="padding:12px">Loading…</div>';
+    const remoteLabel = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : 'remote';
+    throbberInto(list, 'Summoning issues…', remoteLabel, { small: true, emoji: '🐞' });
     try { issues = await call('api', 'issues', sel.value, state.value); draw(); }
     catch (e) { list.innerHTML = ''; list.append(h('div', { style: 'padding:12px', class: 'muted' }, e.message.replace(/^.*Error: /, ''))); }
   };
   const showIssue = async i => {
     detail.innerHTML = '';
-    const comments = h('div', {}, h('div', { class: 'muted' }, 'Loading comments…'));
+    const comments = h('div', {}, throbber('Loading comments…', '', { small: true, emoji: '💬' }));
     const reply = h('textarea', { placeholder: 'Leave a comment', rows: 4, style: 'width:100%' });
     detail.append(h('div', { class: 'detail' },
       h('h3', {}, i.title, h('span', { class: 'muted' }, ` #${i.id}`)),
@@ -797,6 +991,8 @@ function addMenu(el) {
     { label: 'Add existing local repository…', action: addLocal },
     { label: 'Create new local repository…', action: createDialog },
     { label: 'Create repository on a host (and clone)…', action: () => publishDialog({ localPath: null, cloneAfter: true }) },
+    '-',
+    { label: 'Import from GitHub Desktop…', action: importGithubDesktop },
   ]);
 }
 
@@ -811,6 +1007,90 @@ async function addLocal() {
   S.settings = await call('vault', 'settings');
   await loadRepos();
   openRepo(top);
+}
+
+async function importGithubDesktop() {
+  const lm = loadingModal('Import from GitHub Desktop', throbber('Scanning GitHub Desktop…', 'Digging through its local database and logs', { emoji: '🕵️' }));
+  let repos;
+  try { repos = await call('sys', 'githubDesktopRepos'); }
+  catch (e) { lm.close(); return toast(e.message, true); }
+  lm.close();
+  if (!repos.length) return toast('No repositories found in GitHub Desktop. Make sure GitHub Desktop has been used on this machine.');
+  const existing = new Set(S.settings.repos || []);
+  const allRepos = repos.slice().sort((a, b) => a.localeCompare(b));
+  const newCount = allRepos.filter(p => !existing.has(p)).length;
+
+  const filter = h('input', { placeholder: 'Filter repositories…', style: 'flex:1' });
+  const selectAllCb = h('input', { type: 'checkbox', checked: newCount > 0 });
+  const countLabel = h('span', { class: 'muted', style: 'font-size:12px' }, '');
+
+  const items = allRepos.map(p => {
+    const isNew = !existing.has(p);
+    const cb = h('input', { type: 'checkbox', checked: isNew });
+    const badge = !isNew ? h('span', { class: 'muted', style: 'font-size:11px;margin-left:auto' }, '(already added)') : null;
+    const row = h('div', { class: 'row', onclick: (e) => {
+      if (e.target !== cb) cb.checked = !cb.checked;
+      updateCount();
+    } }, cb, h('span', { class: 'name', style: 'direction:ltr;font-family:monospace;font-size:12px' }, p), badge);
+    cb.onchange = () => updateCount();
+    return { path: p, cb, row, isNew };
+  });
+
+  const updateCount = () => {
+    const selCount = items.filter(i => i.cb.checked).length;
+    countLabel.textContent = `${selCount} of ${allRepos.length} selected`;
+    selectAllCb.checked = selCount === allRepos.length;
+    selectAllCb.indeterminate = selCount > 0 && selCount < allRepos.length;
+  };
+  updateCount();
+
+  selectAllCb.onchange = () => {
+    items.forEach(i => (i.cb.checked = selectAllCb.checked));
+    updateCount();
+  };
+
+  const list = h('div', { style: 'max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:6px' }, items.map(i => i.row));
+
+  filter.oninput = () => {
+    const q = filter.value.toLowerCase();
+    items.forEach(i => {
+      i.row.style.display = !q || i.path.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
+
+  const header = h('div', { class: 'list-h', style: 'padding:6px 10px;gap:8px;align-items:center' },
+    h('label', { class: 'check' }, selectAllCb, countLabel),
+    filter
+  );
+
+  const subtext = newCount > 0
+    ? `Found ${repos.length} repository(ies) in GitHub Desktop (${newCount} new to KillerGit).`
+    : `Found ${repos.length} repository(ies) in GitHub Desktop (all are already added to KillerGit).`;
+
+  await modal('Import from GitHub Desktop', [
+    h('p', { class: 'muted', style: 'margin:0 0 6px' }, subtext),
+    header,
+    list,
+  ], [{ label: 'Cancel' }, { label: 'Import selected', primary: true, action: async (btn) => {
+    const selected = items.filter(i => i.cb.checked).map(i => i.path);
+    if (!selected.length) throw new Error('No repositories selected');
+    if (btn) btn.textContent = `Importing ${selected.length} repo(s)…`;
+    const current = S.settings.repos || [];
+    const merged = Array.from(new Set([...current, ...selected]));
+    await saveSettings({ repos: merged });
+    S.settings = await call('vault', 'settings');
+    // Run loadRepos and open the first repo asynchronously so the modal closes immediately
+    setTimeout(async () => {
+      await loadRepos();
+      if (!S.repo && selected.length) {
+        await openRepo(selected[0]);
+      } else {
+        render();
+      }
+      toast(`Imported ${selected.length} repository(ies) from GitHub Desktop`);
+    }, 10);
+    return true;
+  } }], { wide: true });
 }
 
 async function cloneTo(url, depth) {
@@ -835,7 +1115,7 @@ async function cloneDialog() {
   const proto = h('select', {}, h('option', { value: 'ssh' }, 'SSH'), h('option', { value: 'https' }, 'HTTPS'));
   const showUrl = () => { content.innerHTML = ''; content.append(field('Repository URL', url)); };
   const showAcct = async a => {
-    content.innerHTML = '<div class="muted">Loading repositories…</div>';
+    throbberInto(content, 'Loading repositories…', a.label || a.username || a.host, { small: true, emoji: '📦' });
     try {
       const repos = await call('api', 'repos', a.id);
       const f = h('input', { placeholder: 'Filter' });
@@ -930,6 +1210,7 @@ const info = (title, text) => modal(title, h('pre', { class: 'log' }, text), [{ 
 const PROVIDER_NAMES ={ github: 'GitHub.com', gitlab: 'GitLab.com', gitgud: 'Gitgud.io', custom: 'Other GitLab host' };
 
 async function drawAccounts(el) {
+  throbberInto(el, 'Loading accounts…', 'Checking the vault', { small: true, emoji: '🔑' });
   const accts = await call('vault', 'listAccounts');
   el.innerHTML = '';
   el.append(h('div', { class: 'toolbar-row' }, h('button', { class: 'primary', onclick: () => editAccount({}, el) }, 'Add account')),
@@ -946,6 +1227,12 @@ async function drawAccounts(el) {
         catch (err) { info('Token test failed', err.message.replace(/^.*Error: /, '')); }
         b.disabled = false; b.textContent = 'Test token';
       } }, 'Test token'),
+      a.hasToken && h('button', { onclick: async () => {
+        const token = await call('vault', 'revealToken', a.id);
+        if (token) modal('Token — ' + (a.label || a.username || a.host), h('pre', { class: 'log mono', style: 'user-select:all' }, token),
+          [{ label: 'Copy', action: () => { call('sys', 'copy', token); status('Token copied to clipboard'); } }, { label: 'Close', primary: true }]);
+        else toast('No token stored for this account');
+      } }, 'Reveal Token'),
       h('button', { onclick: async e => {
         const b = e.currentTarget; b.disabled = true; b.textContent = 'Testing…';
         const host = SSH_HOSTS[a.host] || a.host;
@@ -954,6 +1241,28 @@ async function drawAccounts(el) {
         info(ok ? 'SSH works' : 'SSH test failed', `git@${host}${a.sshKey ? ' using ' + a.sshKey.split(/[\\/]/).pop() : ' using default keys'}\n\n${out}`);
         b.disabled = false; b.textContent = 'Test SSH';
       } }, 'Test SSH'),
+      h('button', { onclick: async () => {
+        if (!a.sshKey) {
+          // Show all keys that would be tried by default
+          const keys = await call('ssh', 'list');
+          if (!keys.length) return toast('No SSH keys found. This account uses default key discovery, but no keys exist in ~/.ssh.');
+          const body = h('div', {}, h('p', { class: 'muted' }, 'This account uses default key discovery. All keys in ~/.ssh will be tried:'),
+            keys.map(k => h('div', { class: 'card' },
+              h('div', { class: 'title' }, k.name, h('span', { class: 'muted' }, `  ${k.type}`)),
+              h('div', { class: 'mono muted', style: 'word-break:break-all;font-size:11px' }, k.publicKey))));
+          modal('SSH Keys — ' + (a.label || a.username || a.host), body, [{ label: 'Close', primary: true }]);
+        } else {
+          const keys = await call('ssh', 'list');
+          const k = keys.find(k => k.path === a.sshKey);
+          if (!k) return toast(`Assigned key not found: ${a.sshKey}`);
+          modal('SSH Key — ' + k.name, h('div', {},
+            h('div', { class: 'muted', style: 'margin-bottom:8px' }, `Path: ${k.path}`),
+            h('div', { class: 'muted', style: 'margin-bottom:8px' }, `Type: ${k.type}  ·  Comment: ${k.comment}`),
+            h('div', { class: 'muted', style: 'margin-bottom:8px' }, `Fingerprint: ${k.fingerprint}`),
+            h('pre', { class: 'log mono', style: 'user-select:all' }, k.publicKey)),
+            [{ label: 'Copy public key', action: () => { call('sys', 'copy', k.publicKey); status('Public key copied'); } }, { label: 'Close', primary: true }]);
+        }
+      } }, 'Reveal SSH Key'),
       a.sshKey && h('button', { onclick: async () => {
         const k = (await call('ssh', 'list')).find(k => k.path === a.sshKey);
         try { await call('api', 'addSshKey', a.id, `KillerGit ${k.name}`, k.publicKey); info('Key uploaded', `${k.name}.pub was added to your ${a.host} account.`); }
@@ -987,11 +1296,13 @@ async function editAccount(a, el) {
 }
 
 async function drawKeys(el) {
+  throbberInto(el, 'Loading SSH keys…', 'Looking in ~/.ssh', { small: true, emoji: '🗝️' });
   const keys = await call('ssh', 'list');
   el.innerHTML = '';
   el.append(h('div', { class: 'toolbar-row' },
     h('button', { class: 'primary', onclick: () => genKey(el) }, 'Generate key'),
     h('button', { onclick: () => importKey(el) }, 'Import private key'),
+    h('button', { onclick: () => importLocalSshKeys(el) }, 'Import local SSH keys'),
     h('button', { onclick: async () => modal('ssh-agent', h('pre', { class: 'log' }, await call('ssh', 'agentList')), [{ label: 'OK', primary: true }]) }, 'Agent keys')),
     h('p', { class: 'muted' }, 'Keys live in %USERPROFILE%\\.ssh and are used through Windows OpenSSH. To use ssh-agent, enable the "OpenSSH Authentication Agent" service.'));
   if (!keys.length) el.append(h('p', {}, 'No keys found.'));
@@ -1038,7 +1349,62 @@ async function changePass(k) {
     [{ label: 'Cancel' }, { label: 'Change', primary: true, action: async () => { await call('ssh', 'changePassphrase', k.path, o.value, n.value); toast('Passphrase changed'); } }]);
 }
 
+async function importLocalSshKeys(el, customFolder) {
+  let folder = customFolder;
+  let localKeys = await call('sys', 'localSshKeys', folder);
+  if (!localKeys.length && !folder) {
+    const pick = await confirmBox('No keys in ~/.ssh', 'No SSH keys were found in %USERPROFILE%\\.ssh.\n\nWould you like to choose another folder to scan for SSH keys?', 'Choose folder…');
+    if (pick) {
+      folder = await call('sys', 'pickFolder', 'Select folder containing SSH keys');
+      if (folder) localKeys = await call('sys', 'localSshKeys', folder);
+    }
+  }
+  if (!localKeys.length) return toast(folder ? `No SSH keys found in ${folder}.` : 'No SSH keys found in ~/.ssh.');
+  const existing = await call('ssh', 'list');
+  const existingNames = new Set(existing.map(k => k.name));
+  const newKeys = folder ? localKeys : localKeys.filter(k => !existingNames.has(k.name));
+  if (!newKeys.length) return toast('All SSH keys in that folder are already known to KillerGit.');
+  const items = newKeys.map(k => {
+    const cb = h('input', { type: 'checkbox', checked: true });
+    return { key: k, cb, el: h('div', { class: 'row', onclick: () => (cb.checked = !cb.checked) },
+      cb, h('span', { style: 'flex:1' }, k.name), h('span', { class: 'muted' }, k.type),
+      h('span', { class: 'muted' }, k.hasPrivate ? '(has private key)' : '(public only)')) };
+  });
+  const list = h('div', { style: 'max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:6px' }, items.map(i => i.el));
+  const accts = await call('vault', 'listAccounts');
+  const assignTo = h('select', {}, h('option', { value: '' }, '— None —'), accts.map(a => h('option', { value: a.id }, `${a.label || a.username || a.provider} — ${a.host}`)));
+  await modal('Import local SSH keys', [
+    h('p', { class: 'muted' }, `Found ${localKeys.length} key(s) in ${folder || '~/.ssh'}, ${newKeys.length} new to KillerGit.`),
+    list,
+    accts.length ? field('Assign selected keys to account (optional)', assignTo) : null,
+  ], [{ label: 'Cancel' }, { label: 'Import', primary: true, action: async () => {
+    const selected = items.filter(i => i.cb.checked);
+    if (!selected.length) throw new Error('No keys selected');
+    let imported = 0;
+    for (const item of selected) {
+      let keyPath = item.key.path;
+      if (folder && item.key.hasPrivate) {
+        const privContent = await call('sys', 'readFileText', item.key.path);
+        await call('ssh', 'import', item.key.name, privContent);
+        keyPath = item.key.path;
+      } else if (!item.key.pubPath && item.key.hasPrivate) {
+        const privContent = await call('sys', 'readFileText', item.key.path);
+        await call('ssh', 'import', item.key.name, privContent);
+      }
+      if (assignTo.value && item.key.hasPrivate) {
+        const acct = accts.find(a => a.id === assignTo.value);
+        if (acct) await call('vault', 'saveAccount', { id: acct.id, provider: acct.provider, sshKey: keyPath });
+      }
+      imported++;
+    }
+    toast(`Imported / recognized ${imported} SSH key(s)`);
+    drawKeys(el);
+    return true;
+  } }]);
+}
+
 async function drawSecrets(el) {
+  throbberInto(el, 'Unlocking secrets…', 'Decrypting the vault', { small: true, emoji: '🤫' });
   const list = await call('vault', 'listSecrets');
   el.innerHTML = '';
   el.append(h('div', { class: 'toolbar-row' }, h('button', { class: 'primary', onclick: () => editSecret({}, el) }, 'Add secret')),
@@ -1108,6 +1474,14 @@ async function settingsPage() {
 async function boot() {
   S.settings = await call('vault', 'settings');
   applyTheme();
+  const side = $('#sidebar');
+  if (+S.settings.sidebarWidth) side.style.width = Math.max(180, Math.min(560, +S.settings.sidebarWidth)) + 'px';
+  installResizer($('#sidebar-resizer'), side, {
+    min: 180,
+    max: () => Math.min(560, innerWidth * 0.45),
+    reset: '270px',
+    onEnd: w => saveSettings({ sidebarWidth: w }),
+  });
   $('#tb-repo').onclick = () => $('#repo-filter').focus();
   $('#tb-branch').onclick = e => branchMenu(e.currentTarget);
   $('#tb-sync').onclick = syncPrimary;

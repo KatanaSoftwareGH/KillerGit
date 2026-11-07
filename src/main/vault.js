@@ -54,6 +54,7 @@ module.exports = {
   },
   removeAccount(id) { load(); data.accounts = data.accounts.filter(a => a.id !== id); save(); },
   account: id => load().accounts.find(a => a.id === id),
+  revealToken: id => (load().accounts.find(a => a.id === id) || {}).token || '',
   // Matches subdomains too: gitgud serves SSH from ssh.gitgud.io, GitHub from ssh.github.com.
   accountForHost: host => {
     const accts = load().accounts;
