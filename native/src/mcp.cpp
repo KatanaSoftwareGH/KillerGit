@@ -29,6 +29,18 @@ std::string currentBranch(const std::string &repo) {
   return b;
 }
 
+// git redraws progress lines with \r ("Counting objects:  3%\r…  6%\r…"). Keep only the final state of
+// each line so tool results read like a terminal after the command finished.
+std::string cleanProgress(const std::string &log) {
+  std::string out;
+  for (auto &line : split(log, '\n')) {
+    size_t cr = line.find_last_of('\r', line.size() > 0 && line.back() == '\r' ? line.size() - 2 : std::string::npos);
+    std::string last = trim(cr == std::string::npos ? line : line.substr(cr + 1));
+    if (!last.empty()) out += last + "\n";
+  }
+  return trim(out);
+}
+
 json prop(const char *type, const char *desc) { return { { "type", type }, { "description", desc } }; }
 
 struct Tool { const char *name, *desc; json props; Strings required; bool readOnly; std::function<std::string(const json &)> run; };
@@ -86,14 +98,14 @@ std::vector<Tool> tools() {
         std::string r = requireRepo(a), rem = arg(a, "remote"), log;
         Progress p = [&](const std::string &s) { log += s; };
         if (rem.empty()) git::fetchAll(r, p); else git::fetch(r, rem, p);
-        return "Fetch complete.\n" + trim(log);
+        return "Fetch complete.\n" + cleanProgress(log);
       } },
     { "git_pull", "Pull a branch using KillerGit's stored credentials (merge by default).", { { "repo", repo }, { "remote", remote }, { "branch", branch },
         { "rebase", prop("boolean", "Rebase instead of merge") } }, { "repo" }, false, [](const json &a) {
         std::string r = requireRepo(a), rem = arg(a, "remote", "origin"), b = arg(a, "branch"), log;
         if (b.empty()) b = currentBranch(r);
         git::pull(r, rem, b, a.value("rebase", false), [&](const std::string &s) { log += s; });
-        return "Pulled " + rem + "/" + b + ".\n" + trim(log);
+        return "Pulled " + rem + "/" + b + ".\n" + cleanProgress(log);
       } },
     { "git_push", "Push a branch using KillerGit's stored credentials. Never force-pushes.", { { "repo", repo }, { "remote", remote }, { "branch", branch },
         { "setUpstream", prop("boolean", "Set the upstream (-u)") }, { "tags", prop("boolean", "Also push annotated tags (--follow-tags)") } }, { "repo" }, false,
@@ -102,7 +114,7 @@ std::vector<Tool> tools() {
         if (b.empty()) b = currentBranch(r);
         git::PushOpts o; o.setUpstream = a.value("setUpstream", false); o.tags = a.value("tags", false);
         git::push(r, rem, b, o, [&](const std::string &s) { log += s; });
-        return "Pushed " + b + " to " + rem + ".\n" + trim(log);
+        return "Pushed " + b + " to " + rem + ".\n" + cleanProgress(log);
       } },
   };
 }
