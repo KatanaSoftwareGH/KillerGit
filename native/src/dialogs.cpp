@@ -34,7 +34,7 @@ static std::string acctLabel(const json &a) {
   return l + " — " + a.value("host", "");
 }
 
-static std::string defaultCloneDir() { return app.settings.value("cloneDir", documentsDir() + "\\GitHub"); }
+static std::string defaultCloneDir() { return app.settings.value("cloneDir", documentsDir() + KG_SEP "GitHub"); }
 
 // ---------------- identity ----------------
 void App::ensureIdentity(std::function<void()> then) {
@@ -84,7 +84,7 @@ void App::cloneTo(const std::string &url, const std::string &dir, int depth) {
   while (!name.empty() && (name.back() == '/' || name.back() == '\\')) name.pop_back();
   if (endsWith(name, ".git")) name.resize(name.size() - 4);
   name = name.substr(name.find_last_of("/:") + 1);
-  std::string dest = dir + "\\" + name;
+  std::string dest = dir + KG_SEP + name;
   task("Cloning " + name, [=](const Progress &p) {
     git::clone(url, dest, p, depth);
     ui([=] { addRepoPath(dest); });
@@ -167,7 +167,7 @@ static const std::map<std::string, std::string> IGNORES = {
   { "Unity", "[Ll]ibrary/\n[Tt]emp/\n[Oo]bj/\n[Bb]uild/\n[Ll]ogs/\n*.csproj\n*.sln\n" },
 };
 static std::string licenseText(const std::string &kind, const std::string &who) {
-  std::time_t t = std::time(nullptr); std::tm tm{}; localtime_s(&tm, &t);
+  std::time_t t = std::time(nullptr); std::tm tm{}; localTime(t, tm);
   if (kind == "MIT") return "MIT License\n\nCopyright (c) " + std::to_string(tm.tm_year + 1900) + " " + (who.empty() ? "the authors" : who) +
     "\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\n"
     "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\n"
@@ -194,15 +194,15 @@ void App::createDialog() {
       if (a < 0) return false;
       if (a > 0) {
         std::string dir = s->dir; while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/')) dir.pop_back();
-        std::string path = dir + "\\" + trim(s->name), branch = s->branch.empty() ? "main" : s->branch;
+        std::string path = dir + KG_SEP + trim(s->name), branch = s->branch.empty() ? "main" : s->branch;
         std::string gi = IGNORES.at(ign[s->ignore]), li = licenseText(lic[s->license], settings.value("gitName", ""));
         bool readme = s->readme, pub = s->publish;
         task("Creating repository", [=](const Progress &) {
           makeDirs(path);
           git::init(path, branch);
-          if (readme) writeFile(path + "\\README.md", "# " + baseName(path) + "\n");
-          if (!gi.empty()) writeFile(path + "\\.gitignore", gi);
-          if (!li.empty()) writeFile(path + "\\LICENSE", li);
+          if (readme) writeFile(path + KG_SEP "README.md", "# " + baseName(path) + "\n");
+          if (!gi.empty()) writeFile(path + KG_SEP ".gitignore", gi);
+          if (!li.empty()) writeFile(path + KG_SEP "LICENSE", li);
           if (readme || !gi.empty() || !li.empty()) { git::stageAll(path); git::commit(path, "Initial commit"); }
           ui([=] {
             addRepoPath(path);
@@ -415,7 +415,11 @@ static void editAccount(json a, std::shared_ptr<AcctState> st) {
 
 static void drawAccountsTab(App &A, std::shared_ptr<AcctState> st) {
   if (Button("Add account", true)) editAccount(json::object(), st);
+  #ifdef _WIN32
   Muted("Tokens are encrypted with Windows DPAPI. HTTPS remotes use the token; SSH remotes use the assigned key via Windows OpenSSH.");
+#else
+  Muted("Tokens are encrypted (AES-256-GCM, key in ~/.config/KillerGit, readable only by you). HTTPS remotes use the token; SSH remotes use the assigned key via OpenSSH.");
+#endif
   ImGui::Spacing();
   if (st->accounts.empty()) Muted("No accounts yet.");
   for (size_t i = 0; i < st->accounts.size(); i++) {
@@ -568,7 +572,11 @@ static void drawKeysTab(App &A, std::shared_ptr<AcctState> st) {
   if (Button("Scan ~/.ssh")) importKeysFrom(ssh::sshDir(), st);
   ImGui::SameLine();
   if (Button("Agent keys")) bg([] { std::string s = ssh::agentList(); ui([=] { app.info("ssh-agent", s); }); });
+#ifdef _WIN32
   Muted("Keys live in %USERPROFILE%\\.ssh and are used through Windows OpenSSH. To use ssh-agent, enable the \"OpenSSH Authentication Agent\" service.");
+#else
+  Muted("Keys live in ~/.ssh and are used through OpenSSH. ssh-agent is used when SSH_AUTH_SOCK is set (most desktops start one).");
+#endif
   ImGui::Spacing();
   if (st->keysLoading) { Spinner(S(8), S(2)); ImGui::SameLine(); Muted("Looking in ~/.ssh…"); }
   else if (st->keys.empty()) Muted("No keys found.");
@@ -706,8 +714,10 @@ void App::settingsPage() {
     Field("Name", "##gn", &s->name);
     Field("Email", "##ge", &s->email);
     ImGui::Checkbox("Pull with rebase by default", &s->rebase);
+#ifdef _WIN32
     std::string sshLabel = std::string("Set Windows OpenSSH as git's global core.sshCommand") + (s->sshOk ? "" : " (not installed!)");
     ImGui::Checkbox(sshLabel.c_str(), &s->winSsh);
+#endif
     ImGui::Spacing();
     Heading("Slow / outdated connections");
     ImGui::Checkbox("Pull and push in chunks, with automatic retries", &s->chunked);
@@ -719,12 +729,17 @@ void App::settingsPage() {
     int a = Actions("Save");
     if (a < 0) return false;
     if (a > 0) {
-      std::string n = trim(s->name), e = trim(s->email); bool win = s->winSsh && s->sshOk;
+      std::string n = trim(s->name), e = trim(s->email);
+#ifdef _WIN32
+      bool win = s->winSsh && s->sshOk;
+#else
+      bool win = false;
+#endif
       bg([=] {
         try {
           if (!n.empty()) git::setConfig("", "user.name", n);
           if (!e.empty()) git::setConfig("", "user.email", e);
-          if (win) git::setConfig("", "core.sshCommand", "C:/Windows/System32/OpenSSH/ssh.exe");
+          if (win) git::setConfig("", "core.sshCommand", "C:/Windows/System32/OpenSSH/ssh.exe");  // Windows-only option; never set on Linux
         } catch (std::exception &x) { std::string m = x.what(); ui([=] { app.toast(m, true); }); }
       });
       saveSettings({ { "editor", s->editor }, { "cloneDir", s->cloneDir }, { "pullRebase", s->rebase }, { "chunked", s->chunked },

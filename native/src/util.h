@@ -7,6 +7,22 @@
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
+
+// ---- platform ----
+#ifdef _WIN32
+#define KG_SEP "\\"                      // path separator, as a string literal
+#define SHOW_IN_FM "Show in Explorer"
+#else
+#define KG_SEP "/"
+#define SHOW_IN_FM "Show in file manager"
+#endif
+#include <ctime>
+bool isAbsPath(const std::string &p);
+void localTime(std::time_t t, std::tm &out);
+long long timegm_portable(std::tm *tm);
+void sleepMs(int ms);
+// Files embedded in the binary (101/102 = Work Sans fonts, 103 = icon PNG). Data stays valid for the process lifetime.
+bool embeddedResource(int id, const void *&data, size_t &size);
 using Strings = std::vector<std::string>;
 using Progress = std::function<void(const std::string &)>;
 
@@ -57,6 +73,8 @@ std::string roamingDir();                              // %APPDATA%
 void openPath(const std::string &p);
 void showInExplorer(const std::string &p);
 void openUrl(const std::string &u);
+void openTerminal(const std::string &dir);
+void openEditor(const std::string &editor, const std::string &dir);
 void copyToClipboard(const std::string &s);
 std::string pickFolder(const std::string &title);
 std::string pickFile(const std::string &title);

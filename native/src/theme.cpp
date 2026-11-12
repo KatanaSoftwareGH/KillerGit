@@ -1,7 +1,9 @@
 // Claude-inspired look: warm paper/charcoal neutrals, terracotta accent, Work Sans throughout, soft rounded surfaces.
 #include "app.h"
 #include <imgui_internal.h>
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <algorithm>
 #include <cmath>
 
@@ -11,7 +13,7 @@ static float g_uiScale = 1.f;
 
 ImU32 col(const ImVec4 &c, float a) { return ImGui::ColorConvertFloat4ToU32(ImVec4(c.x, c.y, c.z, c.w * a)); }
 ImVec4 hexColor(const std::string &h) {
-  unsigned v = 0; if (h.size() >= 7) sscanf_s(h.c_str() + 1, "%06x", &v);
+  unsigned v = 0; if (h.size() >= 7) sscanf(h.c_str() + 1, "%06x", &v);
   return ImVec4(((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, 1);
 }
 std::string toHex(const ImVec4 &c) {
@@ -20,9 +22,27 @@ std::string toHex(const ImVec4 &c) {
 static ImVec4 mix(ImVec4 a, ImVec4 b, float t) { return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1); }
 
 bool systemPrefersDark() {
+#ifdef _WIN32
   DWORD v = 1, sz = sizeof v;
   RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &sz);
   return v == 0;
+#else
+  // 1) XDG desktop portal (GNOME 42+, KDE 5.24+, most others): 1 = prefer dark.
+  try {
+    ProcResult r = runProcess("gdbus", { "call", "--session", "--timeout", "1", "--dest", "org.freedesktop.portal.Desktop", "--object-path", "/org/freedesktop/portal/desktop",
+                                         "--method", "org.freedesktop.portal.Settings.Read", "org.freedesktop.appearance", "color-scheme" });
+    if (r.code == 0) { if (r.out.find("uint32 1") != std::string::npos) return true; if (r.out.find("uint32 2") != std::string::npos) return false; }
+  } catch (...) {}
+  // 2) GNOME settings directly, then the GTK theme name.
+  try {
+    ProcResult r = runProcess("gsettings", { "get", "org.gnome.desktop.interface", "color-scheme" });
+    if (r.code == 0 && r.out.find("dark") != std::string::npos) return true;
+    r = runProcess("gsettings", { "get", "org.gnome.desktop.interface", "gtk-theme" });
+    if (r.code == 0 && lower(r.out).find("dark") != std::string::npos) return true;
+  } catch (...) {}
+  const char *gt = getenv("GTK_THEME");
+  return gt && lower(gt).find("dark") != std::string::npos;
+#endif
 }
 
 void applyTheme(bool dark, ImVec4 accent) {
@@ -77,55 +97,72 @@ void applyTheme(bool dark, ImVec4 accent) {
   s.ScaleAllSizes(g_uiScale);
 }
 
+#ifndef _WIN32
+// Resolves a family through fontconfig; empty when the match is not the requested family (fc-match always returns something).
+static std::string fcFind(const std::string &family) {
+  try {
+    ProcResult r = runProcess("fc-match", { "-f", "%{family}\n%{file}", family });
+    Strings l = split(r.out, '\n');
+    if (r.code == 0 && l.size() >= 2 && icontains(l[0], split(family, ':')[0]) && fileExists(l[1])) return l[1];
+  } catch (...) {}
+  return "";
+}
+static std::string fcFirst(std::initializer_list<const char *> families) {
+  for (auto f : families) { std::string p = fcFind(f); if (!p.empty()) return p; }
+  return "";
+}
+#endif
+
 void buildFonts(float scale) {
   ImGuiIO &io = ImGui::GetIO();
   g_uiScale = scale;
   io.Fonts->Clear();
+  // System fonts: extra scripts (Greek/Cyrillic) for Work Sans, symbols (arrows, checks, dots), and monospace.
+#ifdef _WIN32
   std::string dir;
   { wchar_t w[MAX_PATH]; GetWindowsDirectoryW(w, MAX_PATH); dir = narrow(w) + "\\Fonts\\"; }
+  auto winFont = [&](const char *a, const char *b = nullptr) { std::string p = dir + a; return fileExists(p) || !b ? p : dir + b; };
+  static const std::string scriptsFont = winFont("segoeui.ttf"), symbolFont = winFont("seguisym.ttf"),
+                           monoFont = winFont("consola.ttf", "cour.ttf"), plainFont = winFont("segoeui.ttf"), boldFont = winFont("seguisb.ttf", "segoeuib.ttf");
+#else
+  static const std::string scriptsFont = fcFirst({ "Noto Sans", "DejaVu Sans", "Cantarell", "Liberation Sans" }),
+                           symbolFont = fcFirst({ "DejaVu Sans", "Noto Sans Symbols 2", "Noto Sans Symbols", "Symbola" }),
+                           monoFont = fcFirst({ "JetBrains Mono", "DejaVu Sans Mono", "Noto Sans Mono", "Liberation Mono", "Ubuntu Mono" }),
+                           plainFont = scriptsFont, boldFont = fcFirst({ "Noto Sans:bold", "DejaVu Sans:bold", "Liberation Sans:bold" });
+#endif
   static const ImWchar ranges[] = { 0x0020, 0x00FF, 0x0100, 0x024F, 0x0370, 0x03FF, 0x0400, 0x04FF, 0x2000, 0x206F, 0x2190, 0x21FF,
                                     0x2200, 0x22FF, 0x2300, 0x23FF, 0x2500, 0x25FF, 0x2600, 0x26FF, 0x2700, 0x27BF, 0 };
-  // resId > 0: font embedded in the exe (RCDATA), with `file` from C:\Windows\Fonts as fallback.
-  auto load = [&](const char *file, float size, const char *fallback = nullptr, int resId = 0) -> ImFont * {
+  // resId > 0: font embedded in the binary, with `file` (a system font) as fallback.
+  auto load = [&](const std::string &file, float size, int resId = 0) -> ImFont * {
     ImFontConfig cfg; cfg.OversampleH = 2; cfg.OversampleV = 1; cfg.PixelSnapH = false;
     ImFont *f = nullptr;
-    if (resId) {
-      HRSRC r = FindResourceW(nullptr, MAKEINTRESOURCEW(resId), MAKEINTRESOURCEW(10) /*RT_RCDATA*/);
-      HGLOBAL g = r ? LoadResource(nullptr, r) : nullptr;
-      if (g) {
-        cfg.FontDataOwnedByAtlas = false;  // resource memory belongs to the exe image
-        f = io.Fonts->AddFontFromMemoryTTF(LockResource(g), (int)SizeofResource(nullptr, r), size * scale, &cfg, ranges);
-        // Work Sans has no Greek/Cyrillic: borrow those from Segoe UI.
-        std::string seg = dir + "segoeui.ttf";
-        if (f && fileExists(seg)) {
-          ImFontConfig m; m.MergeMode = true; m.OversampleH = 2;
-          static const ImWchar extra[] = { 0x0370, 0x03FF, 0x0400, 0x04FF, 0x2000, 0x206F, 0 };
-          io.Fonts->AddFontFromFileTTF(seg.c_str(), size * scale, &m, extra);
-        }
+    const void *data; size_t dataSize;
+    if (resId && embeddedResource(resId, data, dataSize)) {
+      cfg.FontDataOwnedByAtlas = false;  // embedded data belongs to the binary image
+      f = io.Fonts->AddFontFromMemoryTTF((void *)data, (int)dataSize, size * scale, &cfg, ranges);
+      // Work Sans has no Greek/Cyrillic: borrow those from a system UI font.
+      if (f && !scriptsFont.empty() && fileExists(scriptsFont)) {
+        ImFontConfig m; m.MergeMode = true; m.OversampleH = 2;
+        static const ImWchar extra[] = { 0x0370, 0x03FF, 0x0400, 0x04FF, 0x2000, 0x206F, 0 };
+        io.Fonts->AddFontFromFileTTF(scriptsFont.c_str(), size * scale, &m, extra);
       }
     }
-    if (!f) {
-      std::string p = dir + file;
-      if (!fileExists(p) && fallback) p = dir + fallback;
-      f = fileExists(p) ? io.Fonts->AddFontFromFileTTF(p.c_str(), size * scale, &cfg, ranges) : io.Fonts->AddFontDefault();
-    }
-    // Symbols (arrows, check marks, dots) come from Segoe UI Symbol.
-    std::string sym = dir + "seguisym.ttf";
-    if (fileExists(sym)) {
+    if (!f) f = !file.empty() && fileExists(file) ? io.Fonts->AddFontFromFileTTF(file.c_str(), size * scale, &cfg, ranges) : io.Fonts->AddFontDefault();
+    if (!symbolFont.empty() && fileExists(symbolFont)) {
       ImFontConfig m; m.MergeMode = true; m.OversampleH = 2; m.GlyphMinAdvanceX = 0;
       static const ImWchar symRanges[] = { 0x2190, 0x21FF, 0x2200, 0x22FF, 0x2300, 0x23FF, 0x25A0, 0x25FF, 0x2600, 0x26FF, 0x2700, 0x27BF, 0 };
-      io.Fonts->AddFontFromFileTTF(sym.c_str(), size * scale, &m, symRanges);
+      io.Fonts->AddFontFromFileTTF(symbolFont.c_str(), size * scale, &m, symRanges);
     }
     return f;
   };
-  F.body = load("segoeui.ttf", 15.5f, nullptr, 101);
-  F.bold = load("seguisb.ttf", 15.5f, "segoeuib.ttf", 102);
-  F.small = load("segoeui.ttf", 13.f, nullptr, 101);
-  F.title = load("seguisb.ttf", 20.f, "segoeuib.ttf", 102);
+  F.body = load(plainFont, 15.5f, 101);
+  F.bold = load(boldFont, 15.5f, 102);
+  F.small = load(plainFont, 13.f, 101);
+  F.title = load(boldFont, 20.f, 102);
   // Headings: Work Sans SemiBold (the only other face is the monospace one for code).
-  F.heading = load("seguisb.ttf", 18.f, "segoeuib.ttf", 102);
-  F.headingLarge = load("seguisb.ttf", 28.f, "segoeuib.ttf", 102);
-  F.mono = load("consola.ttf", 13.5f, "cour.ttf");
+  F.heading = load(boldFont, 18.f, 102);
+  F.headingLarge = load(boldFont, 28.f, 102);
+  F.mono = load(monoFont, 13.5f);
   io.FontDefault = F.body;
   io.Fonts->Build();
 }

@@ -1,17 +1,31 @@
 # KillerGit
 
-A lightweight Git desktop client for Windows, built with Electron and plain JavaScript (no frontend framework, no bundler).
+A lightweight, native Git desktop client written in C++ with Dear ImGui.
 
-## Run
+- **Windows**: Win32 + Direct3D 11, a single static `KillerGit.exe`.
+- **Linux**: GLFW 3.4 + Vulkan. One binary runs natively on **Wayland** and on **X11** (backend picked at runtime; force with `KILLERGIT_PLATFORM=wayland|x11`). HiDPI and fractional scaling render at full resolution.
 
-Needs [Node.js](https://nodejs.org) (LTS) and Git for Windows.
+## Build
+
+Run once (and again to update everything):
 
 ```
-npm install
-npm start
+powershell -ExecutionPolicy Bypass -File autosetup.ps1
 ```
 
-Build an installer with `npm run dist`.
+It installs or updates Git, CMake and LLVM-MinGW (winget) for Windows, and WSL + Ubuntu with GCC, Vulkan, libcurl, OpenSSL and the Wayland/X11 headers for Linux.
+
+Then in VS Code press **Ctrl+Shift+B** → **Build** and pick **Windows**, **Linux** or **Both**. From a terminal:
+
+```
+powershell -File nativeuild.ps1 -Target Both
+```
+
+Output:
+- `dist/windows/KillerGit.exe`
+- `dist/linux/killergit` plus `dist/killergit-linux-x86_64.tar.gz` (run `install.sh` inside it to add the app to your menu)
+
+Linux runtime needs `git`, a Vulkan driver (`mesa-vulkan-drivers` or your GPU vendor's) and `libcurl`. `zenity` or `kdialog` provides the folder pickers. On a Linux host you can build directly with `native/build-linux.sh`.
 
 ## Features
 

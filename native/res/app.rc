@@ -1,11 +1,11 @@
 #include <winver.h>
 
-1 ICON "../../build/icon.ico"
+1 ICON "icon.ico"
 
 // Work Sans (SIL Open Font License, see fonts/OFL.txt), embedded so the exe stays self-contained.
 101 RCDATA "fonts/WorkSans-Regular.ttf"
 102 RCDATA "fonts/WorkSans-SemiBold.ttf"
-103 RCDATA "../../src/renderer/icon.png"
+103 RCDATA "icon.png"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 0,2,0,0

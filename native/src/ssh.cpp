@@ -1,21 +1,31 @@
 #include "ssh.h"
+#ifdef _WIN32
 #include <windows.h>
+#endif
+#include <cstdio>
 #include <algorithm>
 #include <regex>
 
 namespace ssh {
 
+#ifdef _WIN32
 static std::string sysDir() {
   wchar_t buf[MAX_PATH]; GetEnvironmentVariableW(L"SystemRoot", buf, MAX_PATH);
   std::string root = narrow(buf); if (root.empty()) root = "C:\\Windows";
-  return root + "\\System32\\OpenSSH";
+  return root + KG_SEP "System32" KG_SEP "OpenSSH";
 }
 std::string exe(const std::string &name) {
-  std::string p = sysDir() + "\\" + name + ".exe";
+  std::string p = sysDir() + KG_SEP + name + ".exe";
   return fileExists(p) ? p : name;
 }
-std::string sshDir() { return homeDir() + "\\.ssh"; }
-bool available() { return fileExists(sysDir() + "\\ssh.exe"); }
+std::string sshDir() { return homeDir() + KG_SEP ".ssh"; }
+bool available() { return fileExists(sysDir() + KG_SEP "ssh.exe"); }
+#else
+// Linux: the distro's OpenSSH from PATH.
+std::string exe(const std::string &name) { return name; }
+std::string sshDir() { return homeDir() + "/.ssh"; }
+bool available() { return fileExists("/usr/bin/ssh") || fileExists("/bin/ssh") || fileExists("/usr/local/bin/ssh"); }
+#endif
 
 static std::string run(const std::string &file, const Strings &args, bool throwOnFail = true) {
   ProcResult r = runProcess(file, args);
@@ -32,8 +42,8 @@ std::vector<Key> list(bool fp) {
     if (!endsWith(f, ".pub")) continue;
     Key k;
     k.name = f.substr(0, f.size() - 4);
-    k.pubPath = dir + "\\" + f;
-    k.path = dir + "\\" + k.name;
+    k.pubPath = dir + KG_SEP + f;
+    k.path = dir + KG_SEP + k.name;
     k.hasPrivate = fileExists(k.path);
     try {
       k.publicKey = trim(readFile(k.pubPath));
@@ -63,7 +73,7 @@ std::vector<Key> scanFolder(const std::string &dir) {
   for (auto &f : files) {
     if (!endsWith(f, ".pub")) continue;
     Key k; k.name = f.substr(0, f.size() - 4); seen.push_back(k.name);
-    k.path = dir + "\\" + k.name; k.pubPath = dir + "\\" + f; k.hasPrivate = fileExists(k.path);
+    k.path = dir + KG_SEP + k.name; k.pubPath = dir + KG_SEP + f; k.hasPrivate = fileExists(k.path);
     try {
       auto parts = split(trim(readFile(k.pubPath)), ' ');
       if (!parts.empty()) k.type = parts[0];
@@ -74,7 +84,7 @@ std::vector<Key> scanFolder(const std::string &dir) {
   for (auto &f : files) {
     if (endsWith(f, ".pub") || startsWith(f, "known_hosts") || startsWith(f, "config")) continue;
     if (std::find(seen.begin(), seen.end(), f) != seen.end()) continue;
-    std::string p = dir + "\\" + f;
+    std::string p = dir + KG_SEP + f;
     if (!fileExists(p)) continue;
     try {
       std::string head = readFile(p).substr(0, 100);
@@ -89,7 +99,7 @@ std::vector<Key> scanFolder(const std::string &dir) {
 std::string generate(const std::string &name, const std::string &type, const std::string &comment, const std::string &pass) {
   if (!std::regex_match(name, std::regex("^[\\w.-]+$"))) throw std::runtime_error("Key name may only contain letters, digits, . _ -");
   makeDirs(sshDir());
-  std::string p = sshDir() + "\\" + name;
+  std::string p = sshDir() + KG_SEP + name;
   if (fileExists(p)) throw std::runtime_error("A key with that name already exists");
   Strings args = { "-t", type, "-f", p, "-N", pass, "-C", comment, "-q" };
   if (type == "rsa") { args.push_back("-b"); args.push_back("4096"); }
@@ -99,18 +109,18 @@ std::string generate(const std::string &name, const std::string &type, const std
 void setComment(const std::string &k, const std::string &c, const std::string &p) { run(exe("ssh-keygen"), { "-c", "-C", c, "-P", p, "-f", k }); }
 void changePassphrase(const std::string &k, const std::string &o, const std::string &n) { run(exe("ssh-keygen"), { "-p", "-P", o, "-N", n, "-f", k }); }
 std::string rename(const std::string &k, const std::string &newName) {
-  std::string np = sshDir() + "\\" + newName;
+  std::string np = sshDir() + KG_SEP + newName;
   if (fileExists(np)) throw std::runtime_error("Name already in use");
-  if (!MoveFileW(widen(k).c_str(), widen(np).c_str())) throw std::runtime_error("Rename failed");
-  if (fileExists(k + ".pub")) MoveFileW(widen(k + ".pub").c_str(), widen(np + ".pub").c_str());
+  if (std::rename(k.c_str(), np.c_str()) != 0) throw std::runtime_error("Rename failed");
+  if (fileExists(k + ".pub")) std::rename((k + ".pub").c_str(), (np + ".pub").c_str());
   return np;
 }
 void remove(const std::string &k) {
-  DeleteFileW(widen(k).c_str()); DeleteFileW(widen(k + ".pub").c_str());
+  std::remove(k.c_str()); std::remove((k + ".pub").c_str());
 }
 std::string import(const std::string &name, const std::string &priv) {
   makeDirs(sshDir());
-  std::string p = sshDir() + "\\" + name;
+  std::string p = sshDir() + KG_SEP + name;
   std::string body = priv; size_t i;
   while ((i = body.find("\r\n")) != std::string::npos) body.erase(i, 1);
   writeFile(p, trim(body) + "\n");

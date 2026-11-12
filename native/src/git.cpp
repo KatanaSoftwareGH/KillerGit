@@ -1,7 +1,6 @@
 #include "git.h"
 #include "ssh.h"
 #include "vault.h"
-#include <windows.h>
 #include <algorithm>
 #include <regex>
 #include <sstream>
@@ -165,13 +164,13 @@ long long lastActivity(const std::string &cwd) { return atoll(trim(run(cwd, { "l
 
 static std::string gitDir(const std::string &cwd) {
   std::string g = toBackslash(trim(run(cwd, { "rev-parse", "--git-dir" })));
-  return (g.size() > 1 && g[1] == ':') ? g : cwd + "\\" + g;
+  return isAbsPath(g) ? g : cwd + KG_SEP + g;
 }
 std::string conflictState(const std::string &cwd) {
   std::string d = gitDir(cwd);
-  if (fileExists(d + "\\MERGE_HEAD")) return "merge";
-  if (dirExists(d + "\\rebase-merge") || dirExists(d + "\\rebase-apply")) return "rebase";
-  if (fileExists(d + "\\CHERRY_PICK_HEAD")) return "cherry-pick";
+  if (fileExists(d + KG_SEP "MERGE_HEAD")) return "merge";
+  if (dirExists(d + KG_SEP "rebase-merge") || dirExists(d + KG_SEP "rebase-apply")) return "rebase";
+  if (fileExists(d + KG_SEP "CHERRY_PICK_HEAD")) return "cherry-pick";
   return "";
 }
 
@@ -240,9 +239,9 @@ void merge(const std::string &cwd, const std::string &n, bool squash) { run(cwd,
 void rebase(const std::string &cwd, const std::string &onto) { run(cwd, { "rebase", onto }); }
 void abort(const std::string &cwd) {
   std::string d = gitDir(cwd);
-  if (dirExists(d + "\\rebase-merge") || dirExists(d + "\\rebase-apply")) run(cwd, { "rebase", "--abort" });
-  else if (fileExists(d + "\\CHERRY_PICK_HEAD")) run(cwd, { "cherry-pick", "--abort" });
-  else if (fileExists(d + "\\REVERT_HEAD")) run(cwd, { "revert", "--abort" });
+  if (dirExists(d + KG_SEP "rebase-merge") || dirExists(d + KG_SEP "rebase-apply")) run(cwd, { "rebase", "--abort" });
+  else if (fileExists(d + KG_SEP "CHERRY_PICK_HEAD")) run(cwd, { "cherry-pick", "--abort" });
+  else if (fileExists(d + KG_SEP "REVERT_HEAD")) run(cwd, { "revert", "--abort" });
   else run(cwd, { "merge", "--abort" });
 }
 void continueOp(const std::string &cwd, const std::string &kind) {
@@ -285,7 +284,7 @@ template <class F> static void retry(F fn, const Progress &p, int tries = 5) {
     try { fn(); return; } catch (std::exception &e) {
       if (i >= tries) throw;
       if (p) p("Attempt " + std::to_string(i) + " failed (" + split(e.what(), '\n')[0] + "), retrying…\n");
-      Sleep(1500 * i);
+      sleepMs(1500 * i);
     }
   }
 }

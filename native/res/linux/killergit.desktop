@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=KillerGit
+Comment=Lightweight Git client
+Exec=killergit
+Icon=killergit
+Terminal=false
+Categories=Development;RevisionControl;
+StartupWMClass=killergit

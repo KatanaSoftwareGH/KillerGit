@@ -1,10 +1,14 @@
 // Finds repositories known to GitHub Desktop: repositories.json, its IndexedDB (LevelDB tables with
 // Snappy-compressed blocks) and its log files. Paths are pulled out of the raw bytes and kept if they exist.
 #include "app.h"
+#ifdef _WIN32
 #include <windows.h>
+#endif
+#include <cstring>
 #include <regex>
 #include <set>
 
+#ifdef _WIN32
 static size_t readVarint(const std::string &b, size_t pos, uint64_t &v) {
   v = 0; int shift = 0;
   while (pos < b.size()) { uint8_t c = b[pos++]; v |= (uint64_t)(c & 0x7f) << shift; if (!(c & 0x80)) break; shift += 7; }
@@ -112,3 +116,6 @@ Strings githubDesktopRepos() {
   }
   return Strings(found.begin(), found.end());
 }
+#else
+Strings githubDesktopRepos() { return {}; }
+#endif

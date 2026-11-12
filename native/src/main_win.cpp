@@ -16,6 +16,7 @@ int runMcp();
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 HWND g_hwnd = nullptr;
+void platformWake() { if (g_hwnd) PostMessageW(g_hwnd, WM_NULL, 0, 0); }
 static ID3D11Device *dev = nullptr;
 static ID3D11DeviceContext *ctx = nullptr;
 static IDXGISwapChain *swap = nullptr;
@@ -48,15 +49,14 @@ static bool createDevice(HWND h) {
 
 // Decodes the embedded PNG (resource 103) with WIC and uploads it as an RGBA texture for ImGui::Image.
 static ImTextureID loadIconTexture() {
-  HRSRC r = FindResourceW(nullptr, MAKEINTRESOURCEW(103), MAKEINTRESOURCEW(10) /*RT_RCDATA*/);
-  HGLOBAL g = r ? LoadResource(nullptr, r) : nullptr;
-  if (!g) return 0;
+  const void *png; size_t pngSize;
+  if (!embeddedResource(103, png, pngSize)) return 0;
   IWICImagingFactory *wic = nullptr; IWICStream *stream = nullptr; IWICBitmapDecoder *dec = nullptr;
   IWICBitmapFrameDecode *frame = nullptr; IWICFormatConverter *conv = nullptr;
   ImTextureID id = 0;
   if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
       SUCCEEDED(wic->CreateStream(&stream)) &&
-      SUCCEEDED(stream->InitializeFromMemory((BYTE *)LockResource(g), SizeofResource(nullptr, r))) &&
+      SUCCEEDED(stream->InitializeFromMemory((BYTE *)png, (DWORD)pngSize)) &&
       SUCCEEDED(wic->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnLoad, &dec)) &&
       SUCCEEDED(dec->GetFrame(0, &frame)) && SUCCEEDED(wic->CreateFormatConverter(&conv)) &&
       SUCCEEDED(conv->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) {

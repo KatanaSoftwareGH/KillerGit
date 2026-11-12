@@ -1,6 +1,8 @@
 #include "app.h"
+#ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
+#endif
 #include <algorithm>
 #include <condition_variable>
 #include <deque>
@@ -10,7 +12,7 @@
 
 App app;
 std::atomic<bool> g_dirty{ true };
-extern HWND g_hwnd;
+void platformWake();  // main_win.cpp / main_linux.cpp: nudge the UI loop out of its idle wait
 
 double now() { return ImGui::GetTime(); }
 
@@ -26,7 +28,9 @@ void bg(std::function<void()> fn) {
   if (!poolStarted) {
     poolStarted = true;
     for (int i = 0; i < 8; i++) std::thread([] {
+#ifdef _WIN32
       CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
       for (;;) {
         std::function<void()> f;
         { std::unique_lock l(qmu); qcv.wait(l, [] { return !work.empty(); }); f = std::move(work.front()); work.pop_front(); }
@@ -37,7 +41,7 @@ void bg(std::function<void()> fn) {
   { std::lock_guard l(qmu); work.push_back(std::move(fn)); }
   qcv.notify_one();
 }
-void wakeUi() { g_dirty = true; if (g_hwnd) PostMessageW(g_hwnd, WM_NULL, 0, 0); }
+void wakeUi() { g_dirty = true; platformWake(); }
 void ui(std::function<void()> fn) { { std::lock_guard l(uimu); uiq.push_back(std::move(fn)); } wakeUi(); }
 void drainUiQueue() {
   std::vector<std::function<void()>> q;

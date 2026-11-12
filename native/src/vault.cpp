@@ -1,7 +1,13 @@
 #include "vault.h"
+#ifdef _WIN32
 #include <windows.h>
 #include <bcrypt.h>
 #include <wincrypt.h>
+#else
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <sys/stat.h>
+#endif
 #include <chrono>
 
 namespace vault {
@@ -21,9 +27,10 @@ static std::recursive_mutex mu;
 static json data;
 static bool loaded = false;
 
-static std::string vaultFile() { return appDataDir() + "\\vault.dat"; }
-static std::string settingsFile() { return appDataDir() + "\\settings.json"; }
+static std::string vaultFile() { return appDataDir() + KG_SEP "vault.dat"; }
+static std::string settingsFile() { return appDataDir() + KG_SEP "settings.json"; }
 
+#ifdef _WIN32
 static std::string dpapi(const std::string &in, bool protect) {
   DATA_BLOB src{ (DWORD)in.size(), (BYTE *)in.data() }, dst{};
   BOOL ok = protect ? CryptProtectData(&src, L"KillerGit", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &dst)
@@ -53,9 +60,9 @@ static std::string aesGcmDecrypt(const std::string &key, const std::string &nonc
 // key = DPAPI-unprotect(base64(Local State os_crypt.encrypted_key) minus "DPAPI" prefix).
 static json migrateElectron() {
   std::string dir = appDataDir();
-  std::string raw = readFile(dir + "\\vault.bin");
+  std::string raw = readFile(dir + KG_SEP "vault.bin");
   if (startsWith(raw, "v10")) {
-    json ls = json::parse(readFile(dir + "\\Local State"));
+    json ls = json::parse(readFile(dir + KG_SEP "Local State"));
     std::string k = unbase64(ls["os_crypt"]["encrypted_key"].get<std::string>());
     if (!startsWith(k, "DPAPI")) throw std::runtime_error("unknown key format");
     std::string key = dpapi(k.substr(5), false);
@@ -64,18 +71,61 @@ static json migrateElectron() {
   return json::parse(raw);
 }
 
+static std::string protectData(const std::string &in, bool protect) { return dpapi(in, protect); }
+#else
+// Linux: AES-256-GCM with a random per-user key in ~/.config/KillerGit/vault.key (mode 0600, directory 0700).
+// File format: "KGV1" + 12-byte nonce + ciphertext + 16-byte tag.
+static std::string vaultKey() {
+  std::string p = appDataDir() + "/vault.key";
+  try { std::string k = readFile(p); if (k.size() == 32) return k; } catch (...) {}
+  std::string k(32, 0);
+  if (RAND_bytes((unsigned char *)k.data(), 32) != 1) throw std::runtime_error("RNG failed");
+  writeFile(p, k); chmod(p.c_str(), 0600);
+  return k;
+}
+static std::string protectData(const std::string &in, bool protect) {
+  std::string key = vaultKey();
+  EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+  std::string out; int n = 0, m = 0;
+  bool ok = false;
+  if (protect) {
+    std::string nonce(12, 0); RAND_bytes((unsigned char *)nonce.data(), 12);
+    std::string ct(in.size() + 16, 0), tag(16, 0);
+    ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, (const unsigned char *)key.data(), (const unsigned char *)nonce.data()) == 1 &&
+         EVP_EncryptUpdate(ctx, (unsigned char *)ct.data(), &n, (const unsigned char *)in.data(), (int)in.size()) == 1 &&
+         EVP_EncryptFinal_ex(ctx, (unsigned char *)ct.data() + n, &m) == 1 &&
+         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag.data()) == 1;
+    ct.resize(n + m);
+    out = "KGV1" + nonce + ct + tag;
+  } else {
+    if (in.size() < 4 + 12 + 16 || in.compare(0, 4, "KGV1") != 0) { EVP_CIPHER_CTX_free(ctx); throw std::runtime_error("bad vault"); }
+    std::string nonce = in.substr(4, 12), ct = in.substr(16, in.size() - 32), tag = in.substr(in.size() - 16);
+    out.assign(ct.size() + 16, 0);
+    ok = EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, (const unsigned char *)key.data(), (const unsigned char *)nonce.data()) == 1 &&
+         EVP_DecryptUpdate(ctx, (unsigned char *)out.data(), &n, (const unsigned char *)ct.data(), (int)ct.size()) == 1 &&
+         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag.data()) == 1 &&
+         EVP_DecryptFinal_ex(ctx, (unsigned char *)out.data() + n, &m) == 1;
+    out.resize(n + m);
+  }
+  EVP_CIPHER_CTX_free(ctx);
+  if (!ok) throw std::runtime_error("Vault encryption failed");
+  return out;
+}
+static json migrateElectron() { throw std::runtime_error("no Electron vault on Linux"); }
+#endif
+
 static void save() {
-  writeFile(vaultFile(), dpapi(data.dump(), true));
+  writeFile(vaultFile(), protectData(data.dump(), true));
 }
 
 static json &load() {
   std::lock_guard l(mu);
   if (loaded) return data;
   loaded = true;
-  try { data = json::parse(dpapi(readFile(vaultFile()), false)); }
+  try { data = json::parse(protectData(readFile(vaultFile()), false)); }
   catch (...) {
     data = json::object();
-    if (fileExists(appDataDir() + "\\vault.bin")) {
+    if (fileExists(appDataDir() + KG_SEP "vault.bin")) {
       try { data = migrateElectron(); save(); } catch (...) {}
     }
   }

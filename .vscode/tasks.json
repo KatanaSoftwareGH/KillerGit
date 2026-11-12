@@ -1,33 +1,75 @@
 {
   "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "target",
+      "type": "pickString",
+      "description": "Which platform to build?",
+      "options": ["Windows", "Linux", "Both"],
+      "default": "Both"
+    },
+    {
+      "id": "config",
+      "type": "pickString",
+      "description": "Configuration",
+      "options": ["Release", "Debug"],
+      "default": "Release"
+    }
+  ],
   "tasks": [
     {
-      "label": "Setup: install Node.js and Git (winget)",
+      "label": "Setup: install / update all dependencies",
       "type": "process",
       "command": "powershell.exe",
-      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\scripts\\setup.ps1"],
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\autosetup.ps1"],
       "problemMatcher": []
     },
     {
-      "label": "Install dependencies",
-      "type": "shell",
-      "command": "npm.cmd install",
-      "dependsOn": "Setup: install Node.js and Git (winget)",
-      "problemMatcher": []
-    },
-    {
-      "label": "Run KillerGit",
-      "type": "shell",
-      "command": "npm.cmd start",
-      "dependsOn": "Install dependencies",
-      "problemMatcher": []
-    },
-    {
-      "label": "Build installer",
-      "type": "shell",
-      "command": "npm.cmd run dist",
-      "dependsOn": "Install dependencies",
+      "label": "Build",
+      "detail": "Pick Windows, Linux or Both",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\native\\build.ps1", "-Target", "${input:target}", "-Config", "${input:config}"],
       "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Build Windows",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\native\\build.ps1", "-Target", "Windows"],
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Build Linux",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\native\\build.ps1", "-Target", "Linux"],
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Build Both",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\native\\build.ps1", "-Target", "Both"],
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Run KillerGit (Windows)",
+      "type": "process",
+      "command": "${workspaceFolder}\\dist\\windows\\KillerGit.exe",
+      "dependsOn": "Build Windows",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run KillerGit (Linux, WSLg)",
+      "type": "process",
+      "command": "wsl.exe",
+      "args": ["--cd", "${workspaceFolder}\\dist\\linux", "--", "./killergit"],
+      "dependsOn": "Build Linux",
       "problemMatcher": []
     }
   ]

@@ -4,17 +4,33 @@
 #include "git.h"
 #include "providers.h"
 #include "vault.h"
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
+#endif
 #include <algorithm>
 
 namespace {
 
+#ifdef _WIN32
 HANDLE in, out;
-
-void send(const json &msg) {
-  std::string s = msg.dump() + "\n";
-  DWORD n; WriteFile(out, s.data(), (DWORD)s.size(), &n, nullptr);
+bool openStdio() {
+  in = GetStdHandle(STD_INPUT_HANDLE); out = GetStdHandle(STD_OUTPUT_HANDLE);
+  return in && in != INVALID_HANDLE_VALUE && out && out != INVALID_HANDLE_VALUE;
 }
+long readIn(char *buf, size_t size) { DWORD n = 0; return ReadFile(in, buf, (DWORD)size, &n, nullptr) ? (long)n : -1; }
+void writeOut(const std::string &s) { DWORD n; WriteFile(out, s.data(), (DWORD)s.size(), &n, nullptr); }
+#else
+bool openStdio() { return true; }
+long readIn(char *buf, size_t size) { return (long)read(0, buf, size); }
+void writeOut(const std::string &s) {
+  size_t off = 0;
+  while (off < s.size()) { ssize_t n = write(1, s.data() + off, s.size() - off); if (n <= 0) break; off += n; }
+}
+#endif
+
+void send(const json &msg) { writeOut(msg.dump() + "\n"); }
 
 std::string arg(const json &a, const char *k, const std::string &def = "") { return a.contains(k) && a[k].is_string() ? a[k].get<std::string>() : def; }
 
@@ -149,11 +165,10 @@ json handle(const json &msg, const std::vector<Tool> &ts) {
 }  // namespace
 
 int runMcp() {
-  in = GetStdHandle(STD_INPUT_HANDLE); out = GetStdHandle(STD_OUTPUT_HANDLE);
-  if (!in || in == INVALID_HANDLE_VALUE || !out || out == INVALID_HANDLE_VALUE) return 2;
+  if (!openStdio()) return 2;
   auto ts = tools();
-  std::string buf; char chunk[8192]; DWORD n;
-  while (ReadFile(in, chunk, sizeof chunk, &n, nullptr) && n) {
+  std::string buf; char chunk[8192]; long n;
+  while ((n = readIn(chunk, sizeof chunk)) > 0) {
     buf.append(chunk, n);
     size_t nl;
     while ((nl = buf.find('\n')) != std::string::npos) {

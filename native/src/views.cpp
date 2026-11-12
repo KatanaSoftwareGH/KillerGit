@@ -145,9 +145,9 @@ void App::drawSidebar() {
     if (SelectableRow("##r", r.path == repo, S(30))) openRepo(r.path);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", r.path.c_str());
     if (ImGui::BeginPopupContextItem("ctx")) {
-      if (ImGui::MenuItem("Show in Explorer")) openPath(r.path);
-      if (ImGui::MenuItem("Open in terminal")) launchDetached("cmd.exe /c start wt.exe -d \"" + r.path + "\"", r.path);
-      if (ImGui::MenuItem("Open in editor")) launchDetached("cmd.exe /c " + settings.value("editor", std::string("code")) + " \"" + r.path + "\"", r.path);
+      if (ImGui::MenuItem(SHOW_IN_FM)) openPath(r.path);
+      if (ImGui::MenuItem("Open in terminal")) openTerminal(r.path);
+      if (ImGui::MenuItem("Open in editor")) openEditor(settings.value("editor", std::string("code")), r.path);
       if (ImGui::MenuItem("Copy path")) copyToClipboard(r.path);
       ImGui::Separator();
       if (ImGui::MenuItem("Remove from list")) {
@@ -562,16 +562,16 @@ void App::viewChanges() {
     if (ImGui::BeginPopupContextItem("fctx")) {
       std::string path = f.path; git::FileStatus copy = f;
       if (ImGui::MenuItem("Discard changes…")) discardFiles({ copy });
-      if (ImGui::MenuItem("Ignore file")) task("Ignoring", [=](const Progress &) { appendFile(rp + "\\.gitignore", "\n" + path); });
+      if (ImGui::MenuItem("Ignore file")) task("Ignoring", [=](const Progress &) { appendFile(rp + KG_SEP ".gitignore", "\n" + path); });
       auto dot = path.find_last_of('.');
       if (dot != std::string::npos && dot > path.find_last_of('/') + 1) {
         std::string ext = path.substr(dot + 1);
-        if (ImGui::MenuItem(("Ignore all *." + ext + " files").c_str())) task("Ignoring", [=](const Progress &) { appendFile(rp + "\\.gitignore", "\n*." + ext); });
+        if (ImGui::MenuItem(("Ignore all *." + ext + " files").c_str())) task("Ignoring", [=](const Progress &) { appendFile(rp + KG_SEP ".gitignore", "\n*." + ext); });
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Copy path")) copyToClipboard(path);
-      if (ImGui::MenuItem("Show in Explorer")) showInExplorer(rp + "\\" + toBackslash(path));
-      if (ImGui::MenuItem("Open with default program")) openPath(rp + "\\" + toBackslash(path));
+      if (ImGui::MenuItem(SHOW_IN_FM)) showInExplorer(rp + KG_SEP + toBackslash(path));
+      if (ImGui::MenuItem("Open with default program")) openPath(rp + KG_SEP + toBackslash(path));
       ImGui::EndPopup();
     }
     ImGui::SetCursorScreenPos(ImVec2(p.x + S(6), p.y + (S(30) - ImGui::GetFrameHeight()) / 2));
@@ -658,9 +658,9 @@ void App::viewChanges() {
     Empty("No local changes", status->ahead ? "You have " + std::to_string(status->ahead) + " commit(s) to push." : "Working tree is clean.");
     ImGui::Spacing();
     float bw = S(300); ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) / 2);
-    if (Button("Open in editor", false, false, ImVec2(bw / 2 - S(4), 0))) launchDetached("cmd.exe /c " + settings.value("editor", std::string("code")) + " \"" + repo + "\"", repo);
+    if (Button("Open in editor", false, false, ImVec2(bw / 2 - S(4), 0))) openEditor(settings.value("editor", std::string("code")), repo);
     ImGui::SameLine();
-    if (Button("Show in Explorer", false, false, ImVec2(bw / 2 - S(4), 0))) openPath(repo);
+    if (Button(SHOW_IN_FM, false, false, ImVec2(bw / 2 - S(4), 0))) openPath(repo);
   } else {
     loadFileDiff(*sel);
     if (diffLoading) { Spinner(S(8), S(2)); ImGui::SameLine(); Muted("Loading diff…"); }

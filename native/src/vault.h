@@ -3,7 +3,8 @@
 #include <mutex>
 
 // Encrypted store for accounts (tokens, assigned SSH keys) and free-form secrets, plus plain app settings.
-// Secrets: %APPDATA%\KillerGit\vault.dat, encrypted with DPAPI (CryptProtectData, current user).
+// Secrets: %APPDATA%\KillerGit\vault.dat, encrypted with DPAPI (CryptProtectData, current user) on Windows;
+// ~/.config/KillerGit/vault.dat, AES-256-GCM with a 0600 per-user key file on Linux.
 // On first run it migrates the Electron app's vault.bin (Chromium OSCrypt AES-GCM, key in "Local State").
 namespace vault {
 
