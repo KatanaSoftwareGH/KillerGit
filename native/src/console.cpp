@@ -14,6 +14,7 @@ const std::vector<Template> &builtins() {
     { "Undo last commit (keep changes)", "reset --soft HEAD~1", "Moves HEAD back one commit; the changes stay staged." },
     { "Undo last N commits (keep changes)", "reset --soft HEAD~{count=1}", "Moves HEAD back N commits; the changes stay staged." },
     { "Amend last commit message", "commit --amend -m \"{message}\"", "Rewrites the last commit's message. Don't do this to pushed commits." },
+    { "Tag and push release", "tag {tag=v0.2.0} && push {remote=Github} {tag=v0.2.0}", "Creates the tag, then pushes it. With the GitHub remote, a v* tag triggers the release workflow." },
     { "Create and switch to branch", "switch -c {name}", "" },
     { "Create branch from commit", "switch -c {name} {commit}", "" },
     { "Switch branch", "switch {branch}", "" },
@@ -75,30 +76,36 @@ std::string fill(std::string a, const std::map<std::string, std::string> &v) {
 
 std::string shown(const Strings &args) {
   std::string s = "git";
-  for (auto &a : args) s += a.find_first_of(" \t\"") != std::string::npos ? " \"" + a + "\"" : " " + a;
+  for (auto &a : args) s += a == "&&" ? " && git" : a.find_first_of(" \t\"") != std::string::npos ? " \"" + a + "\"" : " " + a;
   return s;
 }
 }  // namespace
 
+// Runs one git command, or several joined by "&&" (stops at the first failure).
 void App::consoleRun(const std::vector<std::string> &argsIn) {
   if (conRunning || repo.empty()) return;
-  Strings args = argsIn;
-  if (!args.empty() && (args[0] == "git" || args[0] == "git.exe")) args.erase(args.begin());
-  if (args.empty()) return;
+  std::vector<Strings> cmds(1);
+  for (auto &a : argsIn) { if (a == "&&") cmds.emplace_back(); else cmds.back().push_back(a); }
+  for (auto &c : cmds) if (!c.empty() && (c[0] == "git" || c[0] == "git.exe")) c.erase(c.begin());
+  cmds.erase(std::remove_if(cmds.begin(), cmds.end(), [](const Strings &c) { return c.empty(); }), cmds.end());
+  if (cmds.empty()) return;
   conRunning = true;
-  conLog += "$ " + shown(args) + "\n"; conScroll = true;
-  std::string rp = repo, url = currentRemote().empty() ? "" : git::remoteUrl(rp, currentRemote());
+  std::string rp = repo, cur = currentRemote();
+  std::map<std::string, std::string> urls;  // remote name -> URL, so network commands use that remote's credentials
+  for (auto &r : remotes) urls[r.name] = r.fetch;
+  std::string defUrl = urls.count(cur) ? urls[cur] : "";
   bg([=] {
-    ProcResult r = git::runRaw(rp, args, url);
-    ui([=] {
-      conRunning = false;
+    for (auto &args : cmds) {
+      std::string u = defUrl;
+      if (args[0] == "push" || args[0] == "pull" || args[0] == "fetch") for (auto &a : args) if (urls.count(a)) u = urls.at(a);
+      ui([=] { conLog += "$ " + shown(args) + "\n"; conScroll = true; });
+      ProcResult r = git::runRaw(rp, args, u);
       std::string o = r.out + (r.err.empty() ? "" : (r.out.empty() || r.out.back() == '\n' ? "" : "\n") + r.err);
       while (!o.empty() && (o.back() == '\n' || o.back() == '\r')) o.pop_back();
-      conLog += o.empty() ? "" : o + "\n";
-      conLog += r.code == 0 ? "" : "[exit " + std::to_string(r.code) + "]\n";
-      conLog += "\n"; conScroll = true;
-      if (repo == rp) refreshRepo();
-    });
+      ui([=] { conLog += (o.empty() ? "" : o + "\n") + (r.code == 0 ? "" : "[exit " + std::to_string(r.code) + "]\n"); conScroll = true; });
+      if (r.code != 0) break;
+    }
+    ui([=] { conRunning = false; conLog += "\n"; conScroll = true; if (repo == rp) refreshRepo(); });
   });
 }
 
