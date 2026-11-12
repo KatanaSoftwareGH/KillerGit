@@ -72,6 +72,12 @@ std::string unbase64(const std::string &t) {
   }
   return r;
 }
+std::string canonicalHost(const std::string &host) {
+  std::string h = lower(trim(host));
+  for (const char *p : { "ssh.", "altssh." })
+    if (startsWith(h, p) && h.find('.', strlen(p)) != std::string::npos) return h.substr(strlen(p));
+  return h;
+}
 std::string urlEncode(const std::string &s) {
   static const char *hex = "0123456789ABCDEF"; std::string r;
   for (unsigned char c : s) {

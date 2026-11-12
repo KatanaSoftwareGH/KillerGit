@@ -48,11 +48,12 @@ void Badge(char code);
 void RefChip(const std::string &text, ImVec4 color);
 void BeginCard(const char *id);
 void EndCard();
+void Markdown(const std::string &md);   // markdown.cpp
 void Empty(const char *title, const std::string &sub);
 bool SelectableRow(const char *id, bool selected, float height);
 
 // ---------------- app state ----------------
-enum class Tab { Changes, History, Branches, Stashes, Remotes, Issues };
+enum class Tab { Home, Changes, History, Branches, Stashes, Remotes, Issues };
 
 struct RepoEntry {
   std::string path, name, host, ns;
@@ -112,6 +113,17 @@ struct App {
   std::vector<providers::Issue> issues; bool issuesLoading = false; std::string issuesError; bool issuesLoaded = false;
   std::optional<providers::Issue> selIssue; std::vector<providers::Comment> issueComments; std::string issueReply;
 
+  // home (home.cpp)
+  struct HomeEntry { std::string name; bool dir = false; std::string subject; long long time = 0; };
+  struct HomeData {
+    std::string head, lastSubject, lastAuthor, lastHash; long long lastTime = 0, created = 0;
+    int commits = 0, branches = 0, tags = 0; long long storage = 0;
+    std::vector<std::pair<std::string, long long>> langs;  // name, bytes (sorted)
+    std::vector<HomeEntry> entries; std::string readmeName, readme;
+  };
+  std::optional<HomeData> home; bool homeLoading = false, homeDetails = false; std::atomic<int> homeGen{0}; std::string homePath;
+  void loadHome(bool dirOnly = false);
+
   // busy task + progress
   bool busy = false;
   std::string statusText = "Ready", progressLabel, progressChunk, log;
@@ -160,6 +172,7 @@ struct App {
   void drawStatusbar();
   void drawToasts();
   void viewWelcome();
+  void viewHome();
   void viewChanges();
   void viewHistory();
   void viewBranches();

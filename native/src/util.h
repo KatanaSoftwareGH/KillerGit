@@ -44,6 +44,9 @@ std::string formatTime(long long unixSeconds);
 std::string base64(const std::string &bytes);
 std::string unbase64(const std::string &text);
 std::string urlEncode(const std::string &s);
+// Provider host for a git remote host: drops SSH-only front ends like ssh.gitgud.io / altssh.gitlab.com,
+// so they group with and use the same account as the web host. Lower-cased.
+std::string canonicalHost(const std::string &host);
 
 // ---- processes ----
 struct ProcResult { int code = -1; std::string out, err; };

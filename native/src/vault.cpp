@@ -147,11 +147,13 @@ json account(const std::string &id) {
   for (auto &a : load()["accounts"]) if (a.value("id", "") == id) return a;
   return nullptr;
 }
-json accountForHost(const std::string &host) {
+json accountForHost(const std::string &rawHost) {
   std::lock_guard l(mu);
   auto &as = load()["accounts"];
-  for (auto &a : as) if (a.value("host", "") == host) return a;
-  for (auto &a : as) { std::string h = a.value("host", ""); if (!h.empty() && endsWith(host, "." + h)) return a; }
+  // Compare canonical forms on both sides, so accounts saved as "ssh.gitgud.io" still match.
+  std::string host = canonicalHost(rawHost);
+  for (auto &a : as) if (canonicalHost(a.value("host", "")) == host) return a;
+  for (auto &a : as) { std::string h = canonicalHost(a.value("host", "")); if (!h.empty() && endsWith(host, "." + h)) return a; }
   return nullptr;
 }
 std::string saveAccount(json in) {
@@ -169,7 +171,7 @@ std::string saveAccount(json in) {
   a["provider"] = provider;
   a["kind"] = provider == "github" ? "github" : "gitlab";
   std::string host = pick("host"); if (host.empty() && p) host = p->host;
-  a["host"] = lower(host);
+  a["host"] = canonicalHost(host);
   std::string api = pick("api"); if (api.empty()) api = p && *p->api ? p->api : "https://" + host + "/api/v4";
   a["api"] = api;
   a["username"] = pick("username");

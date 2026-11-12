@@ -25,7 +25,7 @@ set(IMGUI_CORE
   ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp)
 
 set(APP_SOURCES
-  src/app.cpp src/views.cpp src/dialogs.cpp src/theme.cpp
+  src/app.cpp src/views.cpp src/home.cpp src/markdown.cpp src/dialogs.cpp src/theme.cpp
   src/util.cpp src/git.cpp src/vault.cpp src/ssh.cpp src/providers.cpp
   src/ghdesktop.cpp src/mcp.cpp)
 

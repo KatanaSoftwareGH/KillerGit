@@ -20,7 +20,7 @@ bool parseRemote(const std::string &url, Parsed &out) {
   std::string full = m[2]; while (!full.empty() && full[0] == '/') full.erase(0, 1);
   Strings parts = split(full, '/');
   if (parts.empty()) return false;
-  out.host = lower(m[1]); out.fullPath = full; out.name = parts.back();
+  out.host = canonicalHost(m[1]); out.fullPath = full; out.name = parts.back();
   parts.pop_back(); out.ns = join(parts, "/");
   return true;
 }

@@ -205,6 +205,7 @@ void App::addRepoPath(const std::string &dir, bool open) {
 void App::invalidateViews() {
   historyLoaded = false; commits.clear(); rows.clear(); lanes.clear();
   branchesLoaded = false; stashesLoaded = false;
+  home.reset();
   fileDiffs.clear(); diffFor.clear();
 }
 
@@ -213,6 +214,7 @@ void App::openRepo(const std::string &p) {
   selFile.clear(); selCommit.clear(); commitDetail.reset(); commitDiff.clear();
   status.reset(); remotes.clear(); conflict.clear();
   issuesLoaded = false; issues.clear(); selIssue.reset(); issueRemote = 0;
+  homePath.clear();
   invalidateViews();
   repoLoading = true;
   saveSettings({ { "lastRepo", p } });

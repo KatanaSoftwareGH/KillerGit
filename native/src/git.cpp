@@ -12,8 +12,8 @@ static const char SEP = '\x1f', REC = '\x1e';
 std::string hostOf(const std::string &url) {
   std::smatch m;
   static const std::regex a("^[a-z+]+://(?:[^@/]+@)?([^/:]+)", std::regex::icase), b("^(?:[^@]+@)?([^:]+):");
-  if (std::regex_search(url, m, a)) return lower(m[1]);
-  if (std::regex_search(url, m, b)) return lower(m[1]);
+  if (std::regex_search(url, m, a)) return canonicalHost(m[1]);
+  if (std::regex_search(url, m, b)) return canonicalHost(m[1]);
   return "";
 }
 
