@@ -225,6 +225,11 @@ void commitChunked(const std::string &cwd, const std::string &message, int size,
   }
 }
 void undoCommit(const std::string &cwd) { run(cwd, { "reset", "--soft", "HEAD~1" }); }
+Strings unpushed(const std::string &cwd) {
+  Strings out; std::istringstream is(run(cwd, { "rev-list", "HEAD", "--not", "--remotes", "--max-count=2000" }, "", nullptr, true, ""));
+  for (std::string l; std::getline(is, l);) { l = trim(l); if (!l.empty()) out.push_back(l); }
+  return out;
+}
 void checkout(const std::string &cwd, const std::string &n) { run(cwd, { "checkout", n }); }
 void checkoutRemote(const std::string &cwd, const std::string &r, const std::string &l) { run(cwd, { "checkout", "-b", l, "--track", r }); }
 void createBranch(const std::string &cwd, const std::string &n, const std::string &from) {

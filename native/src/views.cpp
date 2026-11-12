@@ -738,12 +738,13 @@ void App::loadHistory(bool more) {
   int skip = more ? (int)commits.size() : 0;
   bg([=] {
     std::vector<git::Commit> cs; std::string err;
-    try { cs = git::log(rp, skip, 400, all); } catch (std::exception &e) { err = e.what(); }
+    Strings up; std::string head;
+    try { cs = git::log(rp, skip, 400, all); if (!more) { up = git::unpushed(rp); head = trim(git::run(rp, { "rev-parse", "HEAD" }, "", nullptr, true, "")); } } catch (std::exception &e) { err = e.what(); }
     ui([=] {
       historyLoading = false;
       if (repo != rp) return;
       if (!err.empty()) { toast(err, true); return; }
-      if (!more) { commits.clear(); rows.clear(); lanes.clear(); }
+      if (!more) { commits.clear(); rows.clear(); lanes.clear(); unpushedSet = std::set<std::string>(up.begin(), up.end()); headHash = head; }
       layoutGraph(cs, lanes, rows);
       commits.insert(commits.end(), cs.begin(), cs.end());
       historyMore = cs.size() == 400; historyLoaded = true;
@@ -783,6 +784,10 @@ void App::commitContextMenu(const git::Commit &c) {
   if (ImGui::MenuItem("Checkout (detached)")) task("Checking out", [=](const Progress &) { git::checkout(rp, h); });
   ImGui::Separator();
   if (ImGui::MenuItem("Cherry-pick onto current branch")) task("Cherry-picking", [=](const Progress &) { git::cherryPick(rp, h); });
+  if (h == headHash && unpushedSet.count(h)) {
+    ImGui::Separator();
+    if (ImGui::MenuItem("Undo commit (keep changes)")) task("Undoing commit", [=](const Progress &) { git::undoCommit(rp); });
+  }
   if (ImGui::MenuItem("Revert this commit")) task("Reverting", [=](const Progress &) { git::revert(rp, h); });
   if (ImGui::MenuItem("Reset current branch here (soft)")) task("Resetting", [=](const Progress &) { git::resetTo(rp, h, "soft"); });
   if (ImGui::MenuItem("Reset current branch here (mixed)")) task("Resetting", [=](const Progress &) { git::resetTo(rp, h, "mixed"); });

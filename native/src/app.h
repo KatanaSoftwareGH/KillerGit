@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include "git.h"
 #include "providers.h"
 #include "ssh.h"
@@ -99,6 +100,7 @@ struct App {
   std::vector<ParsedDiff> fileDiffs; bool diffLoading = false; std::string diffFor; int diffGen = 0;
 
   // history
+  std::set<std::string> unpushedSet; std::string headHash;
   std::vector<git::Commit> commits; std::vector<GraphRow> rows; std::vector<std::string> lanes;
   bool historyLoaded = false, historyLoading = false, historyMore = false; std::string historyFilter;
   std::string selCommit; std::optional<git::CommitDetail> commitDetail; std::string commitFile;
