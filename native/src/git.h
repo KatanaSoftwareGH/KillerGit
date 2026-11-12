@@ -43,6 +43,8 @@ void discard(const std::string &cwd, const Strings &tracked, const Strings &untr
 void commit(const std::string &cwd, const std::string &message, bool amend = false);
 void commitChunked(const std::string &cwd, const std::string &message, int size, const Progress &p);
 void undoCommit(const std::string &cwd);
+std::string accountOverride(const std::string &cwd, const std::string &url);  // "" auto, "none", or account id
+void setAccountOverride(const std::string &cwd, const std::string &url, const std::string &val);
 Strings unpushed(const std::string &cwd);  // hashes reachable from HEAD but from no remote branch
 void checkout(const std::string &cwd, const std::string &name);
 void checkoutRemote(const std::string &cwd, const std::string &remoteRef, const std::string &local);

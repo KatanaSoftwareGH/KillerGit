@@ -21,9 +21,34 @@ static std::string fwd(std::string p) { for (auto &c : p) if (c == '\\') c = '/'
 
 // HTTPS gets an Authorization header from the vault; SSH gets Windows' OpenSSH plus the host's key.
 // git runs hidden, so ssh must never prompt (unknown host key, passphrase): fail fast instead.
-static void authFor(const std::string &url, Strings &args, std::map<std::string, std::string> &env) {
+static std::string overrideKey(std::string cwd) {
+  for (auto &c : cwd) { if (c == '\\') c = '/'; c = (char)tolower((unsigned char)c); }
+  while (cwd.size() > 1 && cwd.back() == '/') cwd.pop_back();
+  return cwd;
+}
+// "" = automatic (account matching the host), "none" = no account, otherwise an account id.
+std::string accountOverride(const std::string &cwd, const std::string &url) {
+  json s = vault::settings();
+  if (!s.contains("remoteAccount") || !s["remoteAccount"].is_object()) return "";
+  auto &m = s["remoteAccount"];
+  std::string k = overrideKey(cwd);
+  if (!m.contains(k) || !m[k].is_object()) return "";
+  return m[k].value(url, "");
+}
+void setAccountOverride(const std::string &cwd, const std::string &url, const std::string &val) {
+  json s = vault::settings();
+  json m = s.contains("remoteAccount") && s["remoteAccount"].is_object() ? s["remoteAccount"] : json::object();
+  std::string k = overrideKey(cwd);
+  if (!m.contains(k) || !m[k].is_object()) m[k] = json::object();
+  if (val.empty()) m[k].erase(url); else m[k][url] = val;
+  vault::saveSettings({ { "remoteAccount", m } });
+}
+
+static void authFor(const std::string &cwd, const std::string &url, Strings &args, std::map<std::string, std::string> &env) {
   if (url.empty()) return;
-  json acct = vault::accountForHost(hostOf(url));
+  std::string ov = accountOverride(cwd, url);
+  json acct = ov == "none" ? json(nullptr) : ov.empty() ? vault::accountForHost(hostOf(url)) : vault::account(ov);
+  if (ov.empty() == false && ov != "none" && !acct.is_object()) acct = vault::accountForHost(hostOf(url));  // account was deleted
   bool https = std::regex_search(url, std::regex("^https?:", std::regex::icase));
   if (https && acct.is_object() && !acct.value("token", "").empty()) {
     std::string user = acct.value("username", "");
@@ -34,13 +59,13 @@ static void authFor(const std::string &url, Strings &args, std::map<std::string,
                     " -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4";
   std::string key = acct.is_object() ? acct.value("sshKey", "") : "";
   if (!key.empty()) cmd += " -i \"" + fwd(key) + "\" -o IdentitiesOnly=yes";
-  else { int n = 0; for (auto &k : ssh::privateKeys()) { if (n++ >= 5) break; cmd += " -i \"" + fwd(k) + "\""; } }
+  else if (ov != "none") { int n = 0; for (auto &k : ssh::privateKeys()) { if (n++ >= 5) break; cmd += " -i \"" + fwd(k) + "\""; } }
   env["GIT_SSH_COMMAND"] = cmd;
 }
 
 std::string run(const std::string &cwd, const Strings &args, const std::string &url, const Progress &progress, bool allowFail, const std::string &input) {
   Strings full; ProcOptions o;
-  authFor(url, full, o.env);
+  authFor(cwd, url, full, o.env);
   full.insert(full.end(), args.begin(), args.end());
   o.cwd = cwd; o.input = input; o.onStderr = progress;
   o.env["GIT_TERMINAL_PROMPT"] = "0";

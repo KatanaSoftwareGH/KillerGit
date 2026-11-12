@@ -1034,6 +1034,20 @@ void App::viewRemotes() {
     ImGui::PushFont(F.bold); ImGui::TextUnformatted(r.name.c_str()); ImGui::PopFont();
     if (r.name == def) { ImGui::SameLine(); RefChip("default", C.accent); }
     ImGui::PushFont(F.mono); ImGui::TextDisabled("fetch: %s", r.fetch.c_str()); if (r.push != r.fetch) ImGui::TextDisabled("push:  %s", r.push.c_str()); ImGui::PopFont();
+    {
+      json accts = vault::accounts();
+      std::string cur = git::accountOverride(rp, r.fetch), curLabel = "Automatic (match host)";
+      auto lbl = [](const json &a) { std::string l = a.value("label", ""); if (l.empty()) l = a.value("username", ""); if (l.empty()) l = a.value("provider", ""); return l + " â " + a.value("host", ""); };
+      if (cur == "none") curLabel = "None (no account)";
+      else if (!cur.empty()) for (auto &a : accts) if (a.value("id", "") == cur) curLabel = lbl(a);
+      Muted("Account"); ImGui::SameLine(); ImGui::SetNextItemWidth(S(280));
+      if (ImGui::BeginCombo("##acct", curLabel.c_str())) {
+        if (ImGui::Selectable("Automatic (match host)", cur.empty())) git::setAccountOverride(rp, r.fetch, "");
+        if (ImGui::Selectable("None (no account)", cur == "none")) git::setAccountOverride(rp, r.fetch, "none");
+        for (auto &a : accts) { std::string id = a.value("id", ""); if (ImGui::Selectable(lbl(a).c_str(), id == cur)) git::setAccountOverride(rp, r.fetch, id); }
+        ImGui::EndCombo();
+      }
+    }
     if (Button("Make default")) { json rr = settings.value("repoRemote", json::object()); rr[repo] = r.name; saveSettings({ { "repoRemote", rr } }); }
     ImGui::SameLine(); if (Button("Fetch")) task("Fetching " + r.name, [=](const Progress &p) { git::fetch(rp, r.name, p); });
     ImGui::SameLine(); if (Button("Pull")) doPull(r.name);
