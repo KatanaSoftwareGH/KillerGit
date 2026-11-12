@@ -19,6 +19,9 @@ std::string hostOf(const std::string &url);
 std::string run(const std::string &cwd, const Strings &args, const std::string &url = "", const Progress &progress = nullptr,
                 bool allowFail = false, const std::string &input = "");
 
+// Like run() but never throws: returns exit code, stdout and stderr (used by the console).
+ProcResult runRaw(const std::string &cwd, const Strings &args, const std::string &url = "");
+
 Status status(const std::string &cwd, const std::string &untracked = "all");
 std::string diff(const std::string &cwd, const std::string &file, bool staged, bool untracked);
 std::vector<Commit> log(const std::string &cwd, int skip = 0, int limit = 400, bool all = true);

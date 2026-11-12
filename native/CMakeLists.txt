@@ -27,7 +27,7 @@ set(IMGUI_CORE
 set(APP_SOURCES
   src/app.cpp src/views.cpp src/home.cpp src/markdown.cpp src/dialogs.cpp src/theme.cpp
   src/util.cpp src/git.cpp src/vault.cpp src/ssh.cpp src/providers.cpp
-  src/ghdesktop.cpp src/mcp.cpp)
+  src/ghdesktop.cpp src/mcp.cpp src/console.cpp)
 
 if(WIN32)
   enable_language(RC)

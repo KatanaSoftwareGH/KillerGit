@@ -78,6 +78,17 @@ std::string run(const std::string &cwd, const Strings &args, const std::string &
   return r.out;
 }
 
+ProcResult runRaw(const std::string &cwd, const Strings &args, const std::string &url) {
+  Strings full; ProcOptions o;
+  authFor(cwd, url, full, o.env);
+  full.insert(full.end(), args.begin(), args.end());
+  o.cwd = cwd;
+  o.env["GIT_TERMINAL_PROMPT"] = "0";
+  o.env["GIT_EDITOR"] = "true";
+  o.env["LC_ALL"] = "C";
+  return runProcess("git", full, o);
+}
+
 std::string remoteUrl(const std::string &cwd, const std::string &remote) {
   return trim(run(cwd, { "remote", "get-url", remote }, "", nullptr, true));
 }

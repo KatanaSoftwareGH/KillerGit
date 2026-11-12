@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM-MinGW
+        shell: pwsh
+        run: |
+          $v = '20241119'
+          $zip = "llvm-mingw-$v-ucrt-x86_64.zip"
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$v/$zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP"
+          "$env:RUNNER_TEMP\llvm-mingw-$v-ucrt-x86_64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $bin = (Split-Path (Get-Command clang++.exe).Source) -replace '\', '/'
+          cmake -S native -B build -G 'MinGW Makefiles' -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_C_COMPILER=$bin/clang.exe" "-DCMAKE_CXX_COMPILER=$bin/clang++.exe" `
+            "-DCMAKE_RC_COMPILER=$bin/llvm-windres.exe" "-DCMAKE_MAKE_PROGRAM=$bin/mingw32-make.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build -j $env:NUMBER_OF_PROCESSORS
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/KillerGit.exe dist/KillerGit.exe
+          Compress-Archive -Path dist/KillerGit.exe -DestinationPath dist/KillerGit-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/KillerGit-windows-x86_64.zip
+            dist/KillerGit.exe
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libvulkan-dev libcurl4-openssl-dev libssl-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      - name: Build and bundle
+        run: bash native/build-linux.sh Release "$RUNNER_TEMP/build"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/killergit-linux-x86_64.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv artifacts/KillerGit.exe "artifacts/KillerGit-${GITHUB_REF_NAME}-windows-x86_64.exe"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "KillerGit $GITHUB_REF_NAME" --generate-notes \
+            artifacts/*

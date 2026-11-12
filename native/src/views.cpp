@@ -367,11 +367,11 @@ void App::drawMain() {
 
   // Segmented tabs
   ImVec2 tp = ImGui::GetCursorScreenPos();
-  const char *names[] = { "Home", "Changes", "History", "Branches", "Stashes", "Remotes", "Issues" };
+  const char *names[] = { "Home", "Changes", "History", "Branches", "Stashes", "Remotes", "Issues", "Console" };
   float tw = 0; for (auto *n : names) tw += ImGui::CalcTextSize(n).x + S(28) + S(4);
   ImGui::GetWindowDrawList()->AddRectFilled(tp, ImVec2(tp.x + tw + S(8), tp.y + ImGui::GetFrameHeight() + S(8)), col(C.side), 999);
   ImGui::SetCursorScreenPos(ImVec2(tp.x + S(4), tp.y + S(4)));
-  for (int i = 0; i < 7; i++) {
+  for (int i = 0; i < 8; i++) {
     if (i) ImGui::SameLine(0, S(4));
     std::string l = names[i];
     if (i == (int)Tab::Changes && status && !status->files.empty()) l += "  " + std::to_string(status->files.size());
@@ -407,6 +407,7 @@ void App::drawMain() {
     case Tab::Stashes: viewStashes(); break;
     case Tab::Remotes: viewRemotes(); break;
     case Tab::Issues: viewIssues(); break;
+    case Tab::Console: viewConsole(); break;
   }
   ImGui::EndChild();
 }

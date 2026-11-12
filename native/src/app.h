@@ -54,7 +54,7 @@ void Empty(const char *title, const std::string &sub);
 bool SelectableRow(const char *id, bool selected, float height);
 
 // ---------------- app state ----------------
-enum class Tab { Home, Changes, History, Branches, Stashes, Remotes, Issues };
+enum class Tab { Home, Changes, History, Branches, Stashes, Remotes, Issues, Console };
 
 struct RepoEntry {
   std::string path, name, host, ns;
@@ -93,6 +93,9 @@ struct App {
   bool repoLoading = false;
   int repoGen = 0;
   Tab tab = Tab::Changes;
+  // console
+  std::string conInput, conLog; int conTpl = -1; std::map<std::string, std::string> conParams; bool conScroll = false, conRunning = false;
+  std::vector<std::string> conHistory; int conHistPos = -1;
 
   // changes
   std::string selFile, draftSummary, draftDesc;
@@ -180,6 +183,8 @@ struct App {
   void viewBranches();
   void viewStashes();
   void viewRemotes();
+  void viewConsole();
+  void consoleRun(const std::vector<std::string> &args);
   void viewIssues();
   void drawDiff(const ParsedDiff &d, const char *id);
   void loadFileDiff(const git::FileStatus &f);
