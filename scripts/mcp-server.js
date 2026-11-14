@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Minimal read-only MCP server (stdio, newline-delimited JSON-RPC) exposing KillerGit-style git views.
+// Minimal MCP server (stdio, newline-delimited JSON-RPC) exposing KillerGit-style git views.
 // No dependencies; shells out to the git CLI. Every tool takes `repo` (path to a working tree).
 const { execFile } = require('child_process');
 
@@ -58,12 +58,29 @@ const tools = {
     props: {},
     run: ({ repo }) => git(repo, ['stash', 'list']),
   },
+  add_repo: {
+    description: "Add a repository to KillerGit's sidebar (%APPDATA%\\KillerGit\\settings.json). Restart KillerGit to see it; a running instance may overwrite the file on exit.",
+    props: {},
+    write: true,
+    run: async ({ repo }) => {
+      const fs = require('fs'), path = require('path');
+      const top = path.resolve((await git(repo, ['rev-parse', '--show-toplevel'])).trim());
+      const file = path.join(process.env.APPDATA || '', 'KillerGit', 'settings.json');
+      const s = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+      s.repos = s.repos || [];
+      if (s.repos.some(r => r.toLowerCase() === top.toLowerCase())) return `Already listed: ${top}`;
+      s.repos.push(top);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(s, null, 2));
+      return `Added: ${top}`;
+    },
+  },
 };
 
 const listTools = () => Object.entries(tools).map(([name, t]) => ({
   name, description: t.description,
   inputSchema: { type: 'object', properties: { ...repoProp, ...t.props }, required: ['repo', ...(t.required || [])] },
-  annotations: { readOnlyHint: true },
+  annotations: { readOnlyHint: !t.write },
 }));
 
 async function handle(msg) {
